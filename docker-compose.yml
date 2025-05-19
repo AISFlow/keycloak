@@ -1,0 +1,85 @@
+networks:
+  traefik-network:
+    external: true
+  keycloak-network:
+
+volumes:
+  keycloak-postgres:
+
+services:
+  postgres:
+    image: postgres:17-bookworm
+    container_name: keycloak-postgres
+    restart: unless-stopped
+
+    healthcheck:
+      test: [ "CMD", "pg_isready", "-q", "-d", "${POSTGRES_DB}", "-U", "${POSTGRES_USER}" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+    volumes:
+      - keycloak-postgres:/var/lib/postgresql/data
+
+    environment:
+      POSTGRES_DB: keycloakdb
+      POSTGRES_USER: keycloakdb
+      POSTGRES_PASSWORD: ax8BRZX2Pmj6M66qlYopg1ETetSl0x
+
+    networks:
+      - keycloak-network
+
+  keycloak:
+    image: ghcr.io/aisflow/keycloak:26.2.3
+    container_name: keycloak
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    command: start
+    healthcheck:
+      test: 
+      - "CMD-SHELL"
+      - |
+        exec 3<>/dev/tcp/localhost/9000 &&
+        echo -e 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 &&
+        cat <&3 | tee /tmp/healthcheck.log | grep -q '200 OK'
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+
+    environment:
+      KC_DB: postgres
+      KC_DB_URL_HOST: postgres
+      KC_DB_URL_DATABASE: keycloakdb
+      KC_DB_USERNAME: keycloakdb
+      KC_DB_PASSWORD: ax8BRZX2Pmj6M66qlYopg1ETetSl0x
+      KC_DB_SCHEMA: keycloakdb
+      KEYCLOAK_ADMIN: keycloakadmin
+      KEYCLOAK_ADMIN_PASSWORD: 13MY3JLJ95wSbUz96Ew8Hy78YEGgbU
+      KC_HEALTH_ENABLED: 'true'
+      KC_HOSTNAME: ${KEYCLOAK_HOSTNAME}
+      KC_HTTP_ENABLED: 'true'
+      KC_PROXY_HEADERS: 'xforwarded'
+      PROXY_ADDRESS_FORWARDING: 'true'
+
+    networks:
+      - traefik-network
+      - keycloak-network
+
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-network"
+      - "traefik.http.routers.keycloak.entrypoints=websecure"
+      - "traefik.http.routers.keycloak.tls=true"
+      - "traefik.http.routers.keycloak.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.keycloak.rule=Host(`${KEYCLOAK_HOSTNAME}`)"
+      - "traefik.http.routers.keycloak.service=keycloak"
+      - "traefik.http.services.keycloak.loadbalancer.server.port=8080"
+      - "traefik.http.services.keycloak.loadbalancer.passhostheader=true"
+      - "traefik.http.routers.keycloak.middlewares=compress"
+      - "traefik.http.middlewares.compress.compress=true"
+
