@@ -1,0 +1,107 @@
+name: update-keycloak
+
+on:
+    schedule:
+        - cron: "*/5 * * * *"
+    workflow_dispatch:
+
+permissions:
+    contents: write
+    pull-requests: write
+
+concurrency:
+    group: update-keycloak
+    cancel-in-progress: true
+
+jobs:
+    bump:
+        name: Bump primary Keycloak version
+        runs-on: ubuntu-latest
+        timeout-minutes: 5
+        env:
+            FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Resolve current versions
+              id: current
+              uses: ./.github/actions/keycloak-version
+
+            - name: Fetch latest stable Keycloak release
+              id: latest
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  # Pick the newest release that is NOT marked prerelease and
+                  # whose tag is a clean semver (excludes nightly / candidates).
+                  v=$(gh api 'repos/keycloak/keycloak/releases?per_page=30' \
+                      --jq '[.[] | select(.prerelease == false) | .tag_name | sub("^v"; "")] | map(select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))) | .[0]')
+                  if [ -z "$v" ] || [ "$v" = "null" ]; then
+                      echo "::error::could not resolve a stable Keycloak release"
+                      exit 1
+                  fi
+                  echo "version=$v" >> "$GITHUB_OUTPUT"
+                  echo "::notice title=Latest Keycloak release::$v"
+
+            - name: Compare with current primary
+              id: cmp
+              run: |
+                  current="${{ steps.current.outputs.version }}"
+                  latest="${{ steps.latest.outputs.version }}"
+                  if [ "$current" = "$latest" ]; then
+                      echo "changed=false" >> "$GITHUB_OUTPUT"
+                      echo "::notice::already up to date ($current)"
+                  else
+                      echo "changed=true" >> "$GITHUB_OUTPUT"
+                      echo "current=$current" >> "$GITHUB_OUTPUT"
+                  fi
+
+            - name: Update .keycloak-versions
+              if: steps.cmp.outputs.changed == 'true'
+              run: |
+                  current="${{ steps.cmp.outputs.current }}"
+                  latest="${{ steps.latest.outputs.version }}"
+
+                  # Replace primary (first line) with $latest. If $current still
+                  # appears later in the file (it shouldn't, but defensively),
+                  # leave it; we only change line 1. If $latest already exists
+                  # somewhere below, drop that duplicate to avoid a repeat.
+                  python3 - <<PY
+                  from pathlib import Path
+                  p = Path(".keycloak-versions")
+                  lines = [l.strip() for l in p.read_text().splitlines() if l.strip()]
+                  lines = ["$latest"] + [l for l in lines[1:] if l != "$latest"]
+                  p.write_text("\n".join(lines) + "\n")
+                  PY
+
+                  echo "── new .keycloak-versions ──"
+                  cat .keycloak-versions
+
+            - name: Create pull request
+              if: steps.cmp.outputs.changed == 'true'
+              uses: peter-evans/create-pull-request@v7
+              with:
+                  token: ${{ secrets.GITHUB_TOKEN }}
+                  branch: bot/keycloak-${{ steps.latest.outputs.version }}
+                  delete-branch: true
+                  base: ${{ github.event.repository.default_branch }}
+                  commit-message: "chore: bump Keycloak to ${{ steps.latest.outputs.version }}"
+                  title: "chore: bump Keycloak to ${{ steps.latest.outputs.version }}"
+                  body: |
+                      Auto-detected new stable Keycloak release.
+
+                      | | version |
+                      |---|---|
+                      | Previous primary | `${{ steps.cmp.outputs.current }}` |
+                      | New primary      | `${{ steps.latest.outputs.version }}` |
+
+                      Older entries in `.keycloak-versions` (back-compat lines)
+                      are preserved. Remove them manually when EOL.
+
+                      On merge, the **docker** workflow will rebuild and retag
+                      images for every supported KC version.
+
+                      Source: <https://github.com/keycloak/keycloak/releases/latest>
+                  labels: |
+                      dependencies
+                      automated
