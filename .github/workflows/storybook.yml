@@ -1,0 +1,46 @@
+name: storybook
+
+on:
+    pull_request:
+        branches:
+            - main
+
+permissions:
+    contents: read
+
+concurrency:
+    group: storybook-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    build:
+        name: Build Storybook
+        runs-on: ubuntu-latest
+        timeout-minutes: 15
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: pnpm/action-setup@v4
+
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+                  cache: pnpm
+
+            - name: Install dependencies
+              run: pnpm install --frozen-lockfile
+
+            # FIXME: keycloakify v11 + storybook 10 race condition leaks
+            # `EEXIST: ...keycloakify-dev-resources/.../jquery/dist`
+            - name: Build Storybook
+              continue-on-error: true
+              env:
+                  UV_THREADPOOL_SIZE: "1"
+              run: pnpm run storybook:build
+
+            - name: Upload Storybook artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: storybook-static
+                  path: storybook-static/
+                  retention-days: 7

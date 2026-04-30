@@ -1,0 +1,179 @@
+name: ci
+
+# ════════════════════════════════════════════════════════════════════
+# Single serialised pipeline for theme code:
+#   verify → release (main only) → docker (theme path)
+#
+# Trigger paths:
+#   • PR to main           → verify, then docker (build-only, no push)
+#   • push main            → verify → release → (if version bumped) docker
+#   • push tag v*          → verify → docker (release jar pinned to tag)
+#
+# KC bump (.keycloak-versions only) is handled by docker-kc.yml.
+# Storybook PR validation is handled by storybook.yml.
+# ════════════════════════════════════════════════════════════════════
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write # release job needs to create tags/releases
+  packages: write # docker job pushes to GHCR
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # Cancel in-flight runs on the same ref EXCEPT for tag pushes —
+  # tags are immutable; cancelling a release-tag build risks a half
+  # released artefact.
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  # ────────────────────────────────────────────────────────────────
+  # 1. verify — type check + theme jar build (always)
+  # ────────────────────────────────────────────────────────────────
+  verify:
+    name: Type check & theme jar build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type check
+        run: pnpm exec tsc --noEmit
+
+      - name: Build Keycloak theme
+        run: pnpm run build-keycloak-theme
+
+  # ────────────────────────────────────────────────────────────────
+  # 2. release — main push only, on package.json version bump.
+  #              Creates tag + GitHub Release + jar attach.
+  # ────────────────────────────────────────────────────────────────
+  release:
+    name: GitHub Release on version bump
+    needs: verify
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      released: ${{ steps.tag_check.outputs.released }}
+      version: ${{ steps.pkg.outputs.version }}
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve Keycloak version
+        id: kc
+        uses: ./.github/actions/keycloak-version
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Keycloak theme
+        run: pnpm run build-keycloak-theme
+
+      - name: Read package.json version
+        id: pkg
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Check tag existence
+        id: tag_check
+        run: |
+          git fetch --tags
+          if git rev-parse "v${{ steps.pkg.outputs.version }}" >/dev/null 2>&1; then
+              echo "released=false" >> "$GITHUB_OUTPUT"
+              echo "::notice::v${{ steps.pkg.outputs.version }} already released — skipping"
+          else
+              echo "released=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        if: steps.tag_check.outputs.released == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Release v${{ steps.pkg.outputs.version }} (kc${{ steps.kc.outputs.version }})
+          tag_name: v${{ steps.pkg.outputs.version }}
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(steps.pkg.outputs.version, '-') }}
+          body: |
+            Built against **Keycloak ${{ steps.kc.outputs.version }}**.
+
+            Docker image (multi-arch, GHCR):
+
+            ```
+            ghcr.io/${{ github.repository_owner }}/keycloak:${{ steps.pkg.outputs.version }}-kc${{ steps.kc.outputs.version }}
+            ```
+
+            Other tags published for this release: `${{ steps.pkg.outputs.version }}`, `${{ steps.pkg.outputs.version }}-kc${{ steps.kc.outputs.line }}`, `${{ steps.pkg.outputs.version }}-kc${{ steps.kc.outputs.major }}`, `latest`.
+          append_body: true
+          files: dist_keycloak/keycloak-theme-*.jar
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ────────────────────────────────────────────────────────────────
+  # 3. docker (build-only) — PR validates the build with no push.
+  # ────────────────────────────────────────────────────────────────
+  docker-pr:
+    name: Docker build (PR, no push)
+    needs: verify
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/_docker-build.yml
+    with:
+      push: false
+
+  # ────────────────────────────────────────────────────────────────
+  # 4. docker (push) — fires only after release succeeds OR on tag push.
+  #                    Skipped if version wasn't bumped (no new release).
+  # ────────────────────────────────────────────────────────────────
+  docker:
+    name: Docker build & push
+    needs: [verify, release]
+    if: |
+      always()
+      && needs.verify.result == 'success'
+      && (
+          (needs.release.result == 'success' && needs.release.outputs.released == 'true')
+          || startsWith(github.ref, 'refs/tags/v')
+      )
+    uses: ./.github/workflows/_docker-build.yml
+    with:
+      theme_version: ${{ needs.release.outputs.version }}
+      push: true

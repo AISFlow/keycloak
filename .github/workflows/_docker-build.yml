@@ -1,0 +1,254 @@
+name: _docker-build
+
+# Reusable: discover KC matrix + fetch theme jar + multi-arch build/push.
+# Called from:
+#   • ci.yml         (theme code path: verify → release → here)
+#   • docker-kc.yml  (KC bump path: .keycloak-versions changed)
+#
+# `theme_version` input controls the jar source:
+#   • empty       → latest GitHub Release (KC bump scenario)
+#   • semver      → that exact release (theme dispatch / explicit pin)
+#   • the caller may also let this fire from a `tag-push` ref where the
+#     resolver picks the tag itself.
+
+on:
+    workflow_call:
+        inputs:
+            theme_version:
+                description: "Theme release tag to bake (e.g. 1.2.3). Empty = latest."
+                type: string
+                required: false
+                default: ""
+            push:
+                description: "Whether to push to GHCR (false for PR validation)."
+                type: boolean
+                required: false
+                default: true
+
+permissions:
+    contents: read
+    packages: write
+
+env:
+    REGISTRY: ghcr.io
+    IMAGE_NAME: ${{ github.repository_owner }}/keycloak
+    THEME_JAR_NAME: keycloak-theme-for-kc-all-other-versions.jar
+
+jobs:
+    discover:
+        name: Resolve versions & fetch theme jar
+        runs-on: ubuntu-latest
+        timeout-minutes: 5
+        outputs:
+            matrix: ${{ steps.kc.outputs.matrix }}
+            kc_primary: ${{ steps.kc.outputs.version }}
+            theme_version: ${{ steps.theme.outputs.version }}
+            theme_source: ${{ steps.theme.outputs.source }}
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Resolve Keycloak versions
+              id: kc
+              uses: ./.github/actions/keycloak-version
+
+            - name: Resolve theme version
+              id: theme
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  INPUT_VERSION: ${{ inputs.theme_version }}
+              run: |
+                  set -euo pipefail
+                  if [[ -n "${INPUT_VERSION:-}" ]]; then
+                      v="$INPUT_VERSION"
+                      src="caller-input"
+                  elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+                      v="${GITHUB_REF#refs/tags/v}"
+                      src="tag-push"
+                  else
+                      v=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name | sub("^v"; "")' 2>/dev/null || true)
+                      if [[ -z "$v" || "$v" == "null" ]]; then
+                          echo "::error::no theme release found — create v0.0.1 (or later) on the theme repo first"
+                          exit 1
+                      fi
+                      src="latest-release"
+                  fi
+                  if [[ ! "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
+                      echo "::error::invalid theme version '$v'"
+                      exit 1
+                  fi
+                  {
+                      echo "version=$v"
+                      echo "source=$src"
+                  } >> "$GITHUB_OUTPUT"
+                  echo "::notice title=Theme version::$v ($src)"
+
+            - name: Download theme jar from GitHub Release
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                  set -euo pipefail
+                  mkdir -p artifacts
+                  v="${{ steps.theme.outputs.version }}"
+                  echo "::group::gh release download v$v"
+                  gh release download "v$v" \
+                      -R "$GITHUB_REPOSITORY" \
+                      -p "$THEME_JAR_NAME" \
+                      -O "artifacts/aisflow.jar"
+                  echo "::endgroup::"
+                  ls -lh artifacts/
+
+            - name: Upload theme jar artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: theme-jar
+                  path: artifacts/aisflow.jar
+                  retention-days: 1
+                  if-no-files-found: error
+
+            - name: Summary
+              run: |
+                  {
+                      echo "## Discover"
+                      echo ""
+                      echo "| | value |"
+                      echo "|---|---|"
+                      echo "| KC primary | \`${{ steps.kc.outputs.version }}\` |"
+                      echo "| KC supported | \`${{ steps.kc.outputs.versions }}\` |"
+                      echo "| Theme version | \`${{ steps.theme.outputs.version }}\` (${{ steps.theme.outputs.source }}) |"
+                  } >> "$GITHUB_STEP_SUMMARY"
+
+    build:
+        name: kc${{ matrix.kc.major }} (${{ matrix.kc.version }})
+        needs: discover
+        runs-on: ubuntu-latest
+        timeout-minutes: 45
+        env:
+            FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+            THEME_VERSION: ${{ needs.discover.outputs.theme_version }}
+        strategy:
+            fail-fast: false
+            matrix:
+                kc: ${{ fromJSON(needs.discover.outputs.matrix) }}
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Download theme jar
+              uses: actions/download-artifact@v4
+              with:
+                  name: theme-jar
+                  path: .ci-artifacts/
+
+            - name: Verify jar present
+              run: |
+                  ls -lh .ci-artifacts/
+                  test -s .ci-artifacts/aisflow.jar
+
+            - name: Set up QEMU
+              uses: docker/setup-qemu-action@v3
+              with:
+                  platforms: arm64
+
+            - name: Set up Docker Buildx
+              uses: docker/setup-buildx-action@v3
+
+            - name: Log in to GHCR
+              if: ${{ inputs.push }}
+              uses: docker/login-action@v3
+              with:
+                  registry: ${{ env.REGISTRY }}
+                  username: ${{ github.actor }}
+                  password: ${{ secrets.GITHUB_TOKEN }}
+
+            - name: Extract Docker metadata
+              id: meta
+              uses: docker/metadata-action@v5
+              with:
+                  images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+                  flavor: |
+                      latest=false
+                  tags: |
+                      # ─────────────────────────────────────────────
+                      # Tag taxonomy
+                      # ─────────────────────────────────────────────
+                      # IMMUTABLE — both versions pinned (recommended for prod)
+                      #   <theme>-kc<kc>     (e.g. 1.2.3-kc26.6.1)
+                      #
+                      # FLOATING — one side floats:
+                      #   kc<kc>             KC pinned, theme = latest released
+                      #   <theme>            theme pinned (semver tag), KC = primary
+                      #   latest             both = latest (primary KC, default branch)
+                      #
+                      # All immutable variants get an explicit *theme<X>-kc<Y>* twin
+                      # so anyone inspecting `docker pull <tag>` knows EXACTLY both
+                      # versions even when they came from a `main`-push (floating)
+                      # build, not just from a release tag.
+                      # ─────────────────────────────────────────────
+
+                      # ── Theme git tag (vX.Y.Z) → fully pinned w/ KC ──
+                      type=semver,pattern={{version}},suffix=-kc${{ matrix.kc.version }}
+                      type=semver,pattern={{version}},suffix=-kc${{ matrix.kc.line }}
+                      type=semver,pattern={{version}},suffix=-kc${{ matrix.kc.major }}
+                      type=semver,pattern={{major}}.{{minor}},suffix=-kc${{ matrix.kc.line }}
+                      type=semver,pattern={{major}}.{{minor}},suffix=-kc${{ matrix.kc.major }}
+
+                      # ── Theme git tag → bare semver / latest (primary KC only) ──
+                      type=semver,pattern={{version}},enable=${{ matrix.kc.is_primary }}
+                      type=semver,pattern={{major}}.{{minor}},enable=${{ matrix.kc.is_primary }}
+                      type=raw,value=latest,enable=${{ matrix.kc.is_primary && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+
+                      # ── main branch → KC-pinned floating (theme = latest release) ──
+                      type=raw,value=kc${{ matrix.kc.version }},enable={{is_default_branch}}
+                      type=raw,value=kc${{ matrix.kc.line }},enable={{is_default_branch}}
+                      type=raw,value=kc${{ matrix.kc.major }},enable={{is_default_branch}}
+
+                      # ── main branch → IMMUTABLE both-versions snapshot ──
+                      # Records what theme was baked when this KC base was bumped.
+                      type=raw,value=${{ env.THEME_VERSION }}-kc${{ matrix.kc.version }},enable={{is_default_branch}}
+                      type=raw,value=${{ env.THEME_VERSION }}-kc${{ matrix.kc.line }},enable={{is_default_branch}}
+                      type=raw,value=${{ env.THEME_VERSION }}-kc${{ matrix.kc.major }},enable={{is_default_branch}}
+
+                      # ── PR debug ──
+                      type=ref,event=pr,suffix=-kc${{ matrix.kc.major }}
+
+                      # ── Commit SHA, scoped to KC major ──
+                      type=sha,prefix=sha-,suffix=-kc${{ matrix.kc.major }},format=short
+                  labels: |
+                      org.opencontainers.image.title=AisFlow Keycloak (theme ${{ env.THEME_VERSION }} · kc ${{ matrix.kc.version }})
+                      org.opencontainers.image.description=Keycloak ${{ matrix.kc.version }} with AisFlow NavyStack UI theme ${{ env.THEME_VERSION }} baked in (start --optimized)
+                      org.opencontainers.image.licenses=MIT
+                      org.opencontainers.image.version=${{ env.THEME_VERSION }}-kc${{ matrix.kc.version }}
+                      io.aisflow.keycloak.version=${{ matrix.kc.version }}
+                      io.aisflow.keycloak.line=${{ matrix.kc.line }}
+                      io.aisflow.keycloak.major=${{ matrix.kc.major }}
+                      io.aisflow.keycloak.is_primary=${{ matrix.kc.is_primary }}
+                      io.aisflow.theme.version=${{ env.THEME_VERSION }}
+                      io.aisflow.theme.source=${{ needs.discover.outputs.theme_source }}
+                      io.aisflow.combined.version=${{ env.THEME_VERSION }}-kc${{ matrix.kc.version }}
+
+            - name: Build${{ inputs.push && ' and push' || '' }} (linux/amd64, linux/arm64)
+              uses: docker/build-push-action@v6
+              with:
+                  context: .
+                  file: ./Dockerfile
+                  platforms: linux/amd64,linux/arm64
+                  push: ${{ inputs.push }}
+                  build-args: |
+                      KEYCLOAK_VERSION=${{ matrix.kc.version }}
+                  tags: ${{ steps.meta.outputs.tags }}
+                  labels: ${{ steps.meta.outputs.labels }}
+                  cache-from: type=gha,scope=kc${{ matrix.kc.major }}
+                  cache-to: type=gha,mode=max,scope=kc${{ matrix.kc.major }}
+                  provenance: false
+
+            - name: Summary
+              run: |
+                  {
+                      echo "## kc${{ matrix.kc.major }} — ${{ matrix.kc.version }}${{ matrix.kc.is_primary && ' · **primary**' || '' }}"
+                      echo ""
+                      echo "Theme: \`${{ env.THEME_VERSION }}\` (${{ needs.discover.outputs.theme_source }})"
+                      echo ""
+                      echo "**Tags${{ inputs.push && ' pushed' || ' (build-only, not pushed)' }}**:"
+                      echo '```'
+                      echo "${{ steps.meta.outputs.tags }}"
+                      echo '```'
+                  } >> "$GITHUB_STEP_SUMMARY"
