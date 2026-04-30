@@ -13,10 +13,6 @@ export default defineConfig({
 		keycloakify({
 			accountThemeImplementation: 'none',
 			themeName: 'aisflow',
-			keycloakVersionTargets: {
-				'22-to-25': false,
-				'all-other-versions': 'aisflow.jar'
-			},
 			postBuild: async (buildContext) => {
 				await buildEmailTheme({
 					templatesSrcDirPath: path.join(
