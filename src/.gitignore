@@ -1,6 +1,8 @@
 # This file is managed by Keycloakify, do not edit it manually.
 
 # === Owned files start ===
+# login/i18n.ts
+# login/index.css
 # === Owned files end =====
 
 # === @keycloakify/login-ui-storybook v250004.2.0 ===
@@ -46,8 +48,6 @@
 
 # === @oussemasahbeni/keycloakify-login-shadcn v250004.0.20 ===
 /components/ThemeProvider.tsx
-/login/i18n.ts
-/login/index.css
 /login/KcContext.ts
 /login/KcPage.tsx
 /login/styleLevelCustomization.tsx
