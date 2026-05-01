@@ -138,7 +138,7 @@ jobs:
             deployments: write
             pull-requests: write
         env:
-            CF_PROJECT: aisflow-storybook
+            CF_PROJECT: keycloak-aisflow
             # Secrets surfaced as env so we can branch on emptiness in
             # `if:` expressions (you can't reference `secrets.*` directly
             # in step conditions). The values themselves stay masked.
