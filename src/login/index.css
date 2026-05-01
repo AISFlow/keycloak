@@ -150,6 +150,23 @@
 	body {
 		@apply bg-background text-foreground m-0 text-sm;
 		font-family: var(--font-sans);
+
+		/*
+		  CJK-friendly wrapping defaults.
+		  - `word-break: keep-all` keeps Korean clauses intact at
+		    spaces / punctuation instead of breaking after every
+		    character (the browser default for CJK).
+		  - `overflow-wrap: break-word` is the safety net: when a
+		    single token (long URL, email, id) can't fit, allow it
+		    to break rather than overflow the card.
+		  - `line-break: strict` applies the strict CJK punctuation
+		    rules (e.g. Korean punctuation never lands at the start
+		    of a line).
+		  Mirrors the email layout's wrapping policy in src/email/layout.tsx.
+		*/
+		word-break: keep-all;
+		overflow-wrap: break-word;
+		line-break: strict;
 	}
 	button:not(:disabled),
 	[role="button"]:not(:disabled) {
