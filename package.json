@@ -15,7 +15,8 @@
 		"storybook": "storybook dev -p 6006",
 		"build-storybook": "storybook build",
 		"emails:check": "email check ./src/email/templates",
-		"emails:preview": "email preview ./src/email/templates"
+		"emails:preview": "email preview ./src/email/templates",
+		"build-assets": "node tools/build-assets.mjs"
 	},
 	"dependencies": {
 		"@keycloakify/login-ui": "~250004.6.5",
@@ -48,6 +49,7 @@
 		"@types/react-dom": "^19.2.3",
 		"@vitejs/plugin-react": "^6.0.1",
 		"keycloakify-emails": "^3.3.1",
+		"sharp": "^0.34.5",
 		"storybook": "^10.3.6",
 		"typescript": "~6.0.2",
 		"vite": "^8.0.10"
