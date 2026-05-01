@@ -1,0 +1,46 @@
+name: docker-kc
+
+# ════════════════════════════════════════════════════════════════════
+# KC base bump → rebake images on the new KC version using the LATEST
+# already-released theme jar.
+#
+# Fires ONLY when:
+#   • `.keycloak-versions` is changed on main (the actual KC bump signal)
+#   • someone manually dispatches
+#
+# Dockerfile / build infra changes are validated by ci.yml's `docker-pr`
+# on the way in, and applied to all kc images via the next real KC bump
+# (or via manual dispatch). PR validation here was redundant with
+# ci.yml's `docker-pr` job — removed.
+#
+# Theme code changes do NOT fire here — those go through ci.yml's
+# verify→release→docker pipeline.
+# ════════════════════════════════════════════════════════════════════
+
+on:
+    push:
+        branches: [main]
+        paths:
+            - ".keycloak-versions"
+    workflow_dispatch:
+        inputs:
+            theme_version:
+                description: "Theme release tag to bake (e.g. 1.2.3). Empty = latest."
+                required: false
+                type: string
+
+permissions:
+    contents: read
+    packages: write
+
+concurrency:
+    group: docker-kc-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    build:
+        name: Rebuild on KC bump
+        uses: ./.github/workflows/_docker-build.yml
+        with:
+            theme_version: ${{ inputs.theme_version || '' }}
+            push: true

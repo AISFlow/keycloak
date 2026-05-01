@@ -1,0 +1,175 @@
+/**
+ * This file has been claimed for ownership from @oussemasahbeni/keycloakify-login-shadcn version 250004.0.20.
+ * To relinquish ownership and restore this file to its original content, run the following command:
+ *
+ * $ npx keycloakify own --path "login/index.css" --revert
+ */
+
+@import url(./assets/fonts/inter/inter.css) layer(base);
+
+/*
+  Noto Sans KR — primary Korean-capable typeface for the theme.
+  Self-hosted under `./assets/fonts/notosanskr/` (woff2 mirrored from
+  `@fontsource/noto-sans-kr`) so the font ships as a tracked source
+  asset alongside Inter and Geist. Email layout uses the standalone
+  `noto-sans-kr` jsdelivr CDN instead, since email clients can't
+  bundle fonts.
+*/
+@import url(./assets/fonts/notosanskr/index.css) layer(base);
+
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@source "../**/*.{ts,tsx}";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme {
+    /*
+      Default sans stack puts Noto Sans KR first so Korean glyphs
+      render in the brand typeface; Inter (already imported above)
+      stays as the Latin fallback. Tailwind v4 picks up
+      `--default-font-family` for the body default and `--font-sans`
+      for the `font-sans` utility class.
+    */
+    --font-sans:
+        "Noto Sans KR", "Inter var", ui-sans-serif, system-ui, -apple-system,
+        BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+        sans-serif;
+    --default-font-family: var(--font-sans);
+
+    --font-geist: Geist, sans-serif;
+
+    --color-background: var(--background);
+    --color-foreground: var(--foreground);
+    --color-card: var(--card);
+    --color-card-foreground: var(--card-foreground);
+    --color-popover: var(--popover);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-primary: var(--primary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-secondary: var(--secondary);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-muted: var(--muted);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-accent: var(--accent);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-destructive: var(--destructive);
+    --color-destructive-foreground: var(--destructive-foreground);
+    --color-border: var(--border);
+    --color-input: var(--input);
+    --color-ring: var(--ring);
+}
+
+/*
+  The default border color has changed to `currentcolor` in Tailwind CSS v4,
+  so we've added these compatibility styles to make sure everything still
+  looks the same as it did with Tailwind CSS v3.
+
+  If we ever want to remove these styles, we need to add an explicit border
+  color utility to any element that depends on these defaults.
+*/
+@layer base {
+	*,
+	::after,
+	::before,
+	::backdrop,
+	::file-selector-button {
+		border-color: var(--color-gray-200, currentcolor);
+	}
+}
+
+@layer utilities {
+	.required {
+		@apply text-red-600;
+	}
+}
+
+:root {
+	--radius: 0.65rem;
+	--background: oklch(1 0 0);
+	--foreground: oklch(0.145 0 0);
+	--card: oklch(1 0 0);
+	--card-foreground: oklch(0.145 0 0);
+	--popover: oklch(1 0 0);
+	--popover-foreground: oklch(0.145 0 0);
+	--primary: oklch(0.205 0 0);
+	--primary-foreground: oklch(0.985 0 0);
+	--secondary: oklch(0.97 0 0);
+	--secondary-foreground: oklch(0.205 0 0);
+	--muted: oklch(0.97 0 0);
+	--muted-foreground: oklch(0.556 0 0);
+	--accent: oklch(0.97 0 0);
+	--accent-foreground: oklch(0.205 0 0);
+	--destructive: oklch(0.577 0.245 27.325);
+	--border: oklch(0.922 0 0);
+	--input: oklch(0.922 0 0);
+	--ring: oklch(0.708 0 0);
+	--radius: 0.625rem;
+}
+
+.dark {
+	--background: oklch(0.145 0 0);
+	--foreground: oklch(0.985 0 0);
+	--card: oklch(0.205 0 0);
+	--card-foreground: oklch(0.985 0 0);
+	--popover: oklch(0.205 0 0);
+	--popover-foreground: oklch(0.985 0 0);
+	--primary: oklch(0.922 0 0);
+	--primary-foreground: oklch(0.205 0 0);
+	--secondary: oklch(0.269 0 0);
+	--secondary-foreground: oklch(0.985 0 0);
+	--muted: oklch(0.269 0 0);
+	--muted-foreground: oklch(0.708 0 0);
+	--accent: oklch(0.269 0 0);
+	--accent-foreground: oklch(0.985 0 0);
+	--destructive: oklch(0.704 0.191 22.216);
+	--border: oklch(1 0 0 / 10%);
+	--input: oklch(1 0 0 / 15%);
+	--ring: oklch(0.556 0 0);
+}
+
+@layer utilities {
+	/* Override browser autocomplete styling */
+	input:-webkit-autofill,
+	input:-webkit-autofill:hover,
+	input:-webkit-autofill:focus,
+	input:-webkit-autofill:active {
+		-webkit-text-fill-color: var(--foreground) !important;
+
+		/* Transition the background color so slowly it effectively never changes. 
+           This preserves the transparent or semi-transparent background styles. */
+		transition: background-color 9999s ease-in-out 0s;
+	}
+}
+
+@layer base {
+	* {
+		@apply border-border;
+	}
+	body {
+		@apply bg-background text-foreground m-0 text-sm;
+		font-family: var(--font-sans);
+
+		/*
+		  CJK-friendly wrapping defaults.
+		  - `word-break: keep-all` keeps Korean clauses intact at
+		    spaces / punctuation instead of breaking after every
+		    character (the browser default for CJK).
+		  - `overflow-wrap: break-word` is the safety net: when a
+		    single token (long URL, email, id) can't fit, allow it
+		    to break rather than overflow the card.
+		  - `line-break: strict` applies the strict CJK punctuation
+		    rules (e.g. Korean punctuation never lands at the start
+		    of a line).
+		  Mirrors the email layout's wrapping policy in src/email/layout.tsx.
+		*/
+		word-break: keep-all;
+		overflow-wrap: break-word;
+		line-break: strict;
+	}
+	button:not(:disabled),
+	[role="button"]:not(:disabled) {
+		cursor: pointer;
+	}
+}

@@ -1,0 +1,402 @@
+name: _docker-build
+
+# ════════════════════════════════════════════════════════════════════
+# Reusable docker pipeline. Called from:
+#   • ci.yml         — theme code path: verify → release → here
+#   • docker-kc.yml  — KC bump path: .keycloak-versions changed
+#
+# `theme_version` selects which jar to bake:
+#   • caller-input  → exact semver passed in (release dispatch)
+#   • tag-push      → version derived from refs/tags/v*
+#   • latest        → newest GH Release (KC-bump scenario)
+#
+# Architecture: amd64 + arm64 build on their NATIVE runners
+# (`ubuntu-latest` / `ubuntu-24.04-arm`). No QEMU. On `push=true` each
+# arch pushes by digest only; the `merge` job stitches digests into a
+# multi-arch manifest. `:latest` is intentionally pushed by a separate
+# `promote-latest` job AFTER all merges so it ranks newest in GHCR's
+# tag list (GHCR sorts by recency).
+# ════════════════════════════════════════════════════════════════════
+
+on:
+    workflow_call:
+        inputs:
+            theme_version:
+                description: "Theme release tag to bake (e.g. 1.2.3). Empty = latest."
+                type: string
+                required: false
+                default: ""
+            push:
+                description: "Whether to push to GHCR (false = PR validation)."
+                type: boolean
+                required: false
+                default: true
+
+permissions:
+    contents: read
+    packages: write
+
+env:
+    REGISTRY: ghcr.io
+    THEME_JAR_NAME: keycloak-theme-for-kc-all-other-versions.jar
+
+jobs:
+    # ──────────────────────────────────────────────────────────────
+    # 1. discover — resolve KC matrix, theme jar, lowercase image
+    #               name. All downstream jobs read its outputs.
+    # ──────────────────────────────────────────────────────────────
+    discover:
+        name: Resolve versions & fetch theme jar
+        runs-on: ubuntu-latest
+        timeout-minutes: 5
+        outputs:
+            matrix: ${{ steps.kc.outputs.matrix }}
+            kc_primary: ${{ steps.kc.outputs.version }}
+            theme_version: ${{ steps.theme.outputs.version }}
+            theme_source: ${{ steps.theme.outputs.source }}
+            image_name: ${{ steps.img.outputs.name }}
+        steps:
+            - uses: actions/checkout@v6
+
+            # OCI repository names must be lowercase, but
+            # `github.repository_owner` preserves display casing
+            # (e.g. `AISFlow` → push fails). Lowercase once here and
+            # let every other job consume the output.
+            - name: Compute lowercase image name
+              id: img
+              env:
+                  OWNER: ${{ github.repository_owner }}
+              run: echo "name=${OWNER,,}/keycloak" >> "$GITHUB_OUTPUT"
+
+            - name: Resolve Keycloak versions
+              id: kc
+              uses: ./.github/actions/keycloak-version
+
+            - name: Resolve theme version
+              id: theme
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  INPUT_VERSION: ${{ inputs.theme_version }}
+              run: |
+                  set -euo pipefail
+                  if [[ -n "${INPUT_VERSION:-}" ]]; then
+                      v="$INPUT_VERSION"; src="caller-input"
+                  elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+                      v="${GITHUB_REF#refs/tags/v}"; src="tag-push"
+                  else
+                      v=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name | sub("^v"; "")' 2>/dev/null || true)
+                      if [[ -z "$v" || "$v" == "null" ]]; then
+                          echo "::error::no theme release found — create v0.0.1 (or later) on the theme repo first"
+                          exit 1
+                      fi
+                      src="latest-release"
+                  fi
+                  if [[ ! "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
+                      echo "::error::invalid theme version '$v'"; exit 1
+                  fi
+                  { echo "version=$v"; echo "source=$src"; } >> "$GITHUB_OUTPUT"
+                  echo "::notice title=Theme version::$v ($src)"
+
+            - name: Download theme jar from GitHub Release
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                  set -euo pipefail
+                  mkdir -p artifacts
+                  v="${{ steps.theme.outputs.version }}"
+                  echo "::group::gh release download v$v"
+                  gh release download "v$v" \
+                      -R "$GITHUB_REPOSITORY" \
+                      -p "$THEME_JAR_NAME" \
+                      -O "artifacts/aisflow.jar"
+                  echo "::endgroup::"
+                  ls -lh artifacts/
+
+            - name: Upload theme jar artifact
+              uses: actions/upload-artifact@v7
+              with:
+                  name: theme-jar
+                  path: artifacts/aisflow.jar
+                  retention-days: 1
+                  if-no-files-found: error
+
+            - name: Summary
+              run: |
+                  {
+                      echo "## Discover"
+                      echo ""
+                      echo "| | value |"
+                      echo "|---|---|"
+                      echo "| KC primary | \`${{ steps.kc.outputs.version }}\` |"
+                      echo "| KC supported | \`${{ steps.kc.outputs.versions }}\` |"
+                      echo "| Theme version | \`${{ steps.theme.outputs.version }}\` (${{ steps.theme.outputs.source }}) |"
+                      echo "| Image | \`${{ env.REGISTRY }}/${{ steps.img.outputs.name }}\` |"
+                  } >> "$GITHUB_STEP_SUMMARY"
+
+    # ──────────────────────────────────────────────────────────────
+    # 2. build — per (kc × platform) on the native runner.
+    #              push=true  → push by digest, merge job assembles tags
+    #              push=false → cacheonly validation (PR path)
+    # ──────────────────────────────────────────────────────────────
+    build:
+        name: kc${{ matrix.kc.major }} ${{ matrix.platform.arch }}
+        needs: discover
+        runs-on: ${{ matrix.platform.runner }}
+        timeout-minutes: 45
+        env:
+            THEME_VERSION: ${{ needs.discover.outputs.theme_version }}
+        strategy:
+            fail-fast: false
+            matrix:
+                kc: ${{ fromJSON(needs.discover.outputs.matrix) }}
+                platform:
+                    - { runner: ubuntu-latest, arch: amd64 }
+                    - { runner: ubuntu-24.04-arm, arch: arm64 }
+        steps:
+            - uses: actions/checkout@v6
+
+            - name: Download theme jar
+              uses: actions/download-artifact@v8
+              with:
+                  name: theme-jar
+                  path: .ci-artifacts/
+
+            - name: Verify jar present
+              run: test -s .ci-artifacts/aisflow.jar
+
+            - uses: ./.github/actions/docker-setup
+              with:
+                  push: ${{ inputs.push }}
+                  token: ${{ secrets.GITHUB_TOKEN }}
+
+            # One step covers both push and PR-validation paths:
+            #   • push=true  → push by digest; the digest goes to merge.
+            #   • push=false → `type=cacheonly` runs the full build but
+            #                  exports nothing (the cache is still seeded,
+            #                  so a follow-up real push is fast).
+            - name: Build${{ inputs.push && ' (push by digest)' || ' (validate, cacheonly)' }}
+              id: build
+              uses: docker/build-push-action@v7
+              with:
+                  context: .
+                  file: ./Dockerfile
+                  platforms: linux/${{ matrix.platform.arch }}
+                  build-args: |
+                      KEYCLOAK_VERSION=${{ matrix.kc.version }}
+                  outputs: ${{ inputs.push && format('type=image,name={0}/{1},push-by-digest=true,name-canonical=true,push=true', env.REGISTRY, needs.discover.outputs.image_name) || 'type=cacheonly' }}
+                  cache-from: type=gha,scope=kc${{ matrix.kc.major }}-${{ matrix.platform.arch }}
+                  cache-to: type=gha,mode=max,scope=kc${{ matrix.kc.major }}-${{ matrix.platform.arch }}
+                  provenance: false
+
+            - name: Export digest
+              if: ${{ inputs.push }}
+              run: |
+                  set -euo pipefail
+                  mkdir -p "${{ runner.temp }}/digests"
+                  digest="${{ steps.build.outputs.digest }}"
+                  touch "${{ runner.temp }}/digests/${digest#sha256:}"
+
+            - name: Upload digest
+              if: ${{ inputs.push }}
+              uses: actions/upload-artifact@v7
+              with:
+                  name: digests-${{ matrix.kc.version }}-${{ matrix.platform.arch }}
+                  path: ${{ runner.temp }}/digests/*
+                  if-no-files-found: error
+                  retention-days: 1
+
+    # ──────────────────────────────────────────────────────────────
+    # 3. merge — stitch per-arch digests into a multi-arch manifest
+    #            list and push under the full tag taxonomy. `:latest`
+    #            is filtered out here and re-pushed last by
+    #            `promote-latest` so GHCR ranks it newest.
+    # ──────────────────────────────────────────────────────────────
+    merge:
+        name: kc${{ matrix.kc.major }} manifest
+        needs: [discover, build]
+        if: ${{ inputs.push }}
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        env:
+            THEME_VERSION: ${{ needs.discover.outputs.theme_version }}
+            IMAGE_REF: ${{ needs.discover.outputs.image_name }}
+        strategy:
+            fail-fast: false
+            matrix:
+                kc: ${{ fromJSON(needs.discover.outputs.matrix) }}
+        steps:
+            # Required even though this job doesn't build from source —
+            # `./.github/actions/docker-setup` is a local composite action,
+            # so its action.yml must be present on the runner.
+            - uses: actions/checkout@v6
+
+            - name: Download digests
+              uses: actions/download-artifact@v8
+              with:
+                  path: ${{ runner.temp }}/digests
+                  pattern: digests-${{ matrix.kc.version }}-*
+                  merge-multiple: true
+
+            - uses: ./.github/actions/docker-setup
+              with:
+                  token: ${{ secrets.GITHUB_TOKEN }}
+
+            - name: Extract Docker metadata
+              id: meta
+              uses: docker/metadata-action@v6
+              with:
+                  images: ${{ env.REGISTRY }}/${{ env.IMAGE_REF }}
+                  flavor: |
+                      latest=false
+                  # ─────────────────────────────────────────────
+                  # Tag taxonomy
+                  # ─────────────────────────────────────────────
+                  # IMMUTABLE — both versions pinned (recommended for prod):
+                  #   <theme>-kc<kc>     (e.g. 1.2.3-kc26.6.1)
+                  # FLOATING — one side floats:
+                  #   kc<kc>             KC pinned, theme = latest released
+                  #   <theme>            theme pinned (semver tag), KC = primary
+                  #   latest             both = latest (primary KC, default branch)
+                  # Every immutable variant gets an explicit theme<X>-kc<Y>
+                  # twin so anyone inspecting `docker pull <tag>` knows the
+                  # exact pair, even when it came from a `main`-push build.
+                  # ─────────────────────────────────────────────
+                  tags: |
+                      # Theme git tag (vX.Y.Z) → fully pinned w/ KC
+                      type=semver,pattern={{version}},suffix=-kc${{ matrix.kc.version }}
+                      type=semver,pattern={{version}},suffix=-kc${{ matrix.kc.line }}
+                      type=semver,pattern={{version}},suffix=-kc${{ matrix.kc.major }}
+                      type=semver,pattern={{major}}.{{minor}},suffix=-kc${{ matrix.kc.line }}
+                      type=semver,pattern={{major}}.{{minor}},suffix=-kc${{ matrix.kc.major }}
+
+                      # Theme git tag → bare semver / latest (primary KC only)
+                      type=semver,pattern={{version}},enable=${{ matrix.kc.is_primary }}
+                      type=semver,pattern={{major}}.{{minor}},enable=${{ matrix.kc.is_primary }}
+                      type=raw,value=latest,enable=${{ matrix.kc.is_primary && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+
+                      # main → KC-pinned floating (theme = latest released)
+                      type=raw,value=kc${{ matrix.kc.version }},enable={{is_default_branch}}
+                      type=raw,value=kc${{ matrix.kc.line }},enable={{is_default_branch}}
+                      type=raw,value=kc${{ matrix.kc.major }},enable={{is_default_branch}}
+
+                      # main → IMMUTABLE both-versions snapshot
+                      type=raw,value=${{ env.THEME_VERSION }}-kc${{ matrix.kc.version }},enable={{is_default_branch}}
+                      type=raw,value=${{ env.THEME_VERSION }}-kc${{ matrix.kc.line }},enable={{is_default_branch}}
+                      type=raw,value=${{ env.THEME_VERSION }}-kc${{ matrix.kc.major }},enable={{is_default_branch}}
+
+                      # Commit SHA, scoped to KC major
+                      type=sha,prefix=sha-,suffix=-kc${{ matrix.kc.major }},format=short
+                  labels: |
+                      org.opencontainers.image.title=AisFlow Keycloak (theme ${{ env.THEME_VERSION }} · kc ${{ matrix.kc.version }})
+                      org.opencontainers.image.description=Keycloak ${{ matrix.kc.version }} with AisFlow NavyStack UI theme ${{ env.THEME_VERSION }} baked in (start --optimized)
+                      org.opencontainers.image.licenses=MIT
+                      org.opencontainers.image.version=${{ env.THEME_VERSION }}-kc${{ matrix.kc.version }}
+                      io.aisflow.keycloak.version=${{ matrix.kc.version }}
+                      io.aisflow.keycloak.line=${{ matrix.kc.line }}
+                      io.aisflow.keycloak.major=${{ matrix.kc.major }}
+                      io.aisflow.keycloak.is_primary=${{ matrix.kc.is_primary }}
+                      io.aisflow.theme.version=${{ env.THEME_VERSION }}
+                      io.aisflow.theme.source=${{ needs.discover.outputs.theme_source }}
+                      io.aisflow.combined.version=${{ env.THEME_VERSION }}-kc${{ matrix.kc.version }}
+
+            # `:latest` is filtered out here so `promote-latest` can push
+            # it last (GHCR sort = recency). One bash block does the
+            # filter, push, and inspection — keeps the jq parse single-shot.
+            - name: Push manifest list and inspect
+              working-directory: ${{ runner.temp }}/digests
+              run: |
+                  set -euo pipefail
+                  latest_ref="${{ env.REGISTRY }}/${{ env.IMAGE_REF }}:latest"
+
+                  echo "::group::resolve non-latest tags"
+                  mapfile -t tags < <(jq -cr --arg latest "$latest_ref" \
+                      '.tags[] | select(. != $latest)' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+                  printf '%s\n' "${tags[@]:-(none)}"
+                  echo "::endgroup::"
+
+                  if [ "${#tags[@]}" -eq 0 ]; then
+                      echo "::notice::no non-latest tags to push — skipping"
+                      exit 0
+                  fi
+
+                  echo "::group::create multi-arch manifest"
+                  tag_args=(); for t in "${tags[@]}"; do tag_args+=(-t "$t"); done
+                  digest_refs=()
+                  for f in *; do
+                      digest_refs+=("${{ env.REGISTRY }}/${{ env.IMAGE_REF }}@sha256:$f")
+                  done
+                  docker buildx imagetools create "${tag_args[@]}" "${digest_refs[@]}"
+                  echo "::endgroup::"
+
+                  echo "::group::inspect ${tags[0]}"
+                  docker buildx imagetools inspect "${tags[0]}"
+                  echo "::endgroup::"
+
+            - name: Summary
+              run: |
+                  {
+                      echo "## kc${{ matrix.kc.major }} — ${{ matrix.kc.version }}${{ matrix.kc.is_primary && ' · **primary**' || '' }}"
+                      echo ""
+                      echo "Theme: \`${{ env.THEME_VERSION }}\` (${{ needs.discover.outputs.theme_source }})"
+                      echo ""
+                      echo "**Tags pushed (\`:latest\` excluded — see promote-latest)**:"
+                      echo '```'
+                      echo "${{ steps.meta.outputs.tags }}"
+                      echo '```'
+                  } >> "$GITHUB_STEP_SUMMARY"
+
+    # ──────────────────────────────────────────────────────────────
+    # 4. promote-latest — push `:latest` LAST so it ranks newest in
+    #                     GHCR. Skipped on tag pushes / PRs by the
+    #                     same default-branch guard `merge` uses.
+    # ──────────────────────────────────────────────────────────────
+    promote-latest:
+        name: Promote :latest tag
+        needs: [discover, merge]
+        if: ${{ inputs.push && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+        runs-on: ubuntu-latest
+        timeout-minutes: 5
+        env:
+            IMAGE_REF: ${{ needs.discover.outputs.image_name }}
+        steps:
+            # `./.github/actions/docker-setup` is a local composite action;
+            # its action.yml must be checked out before it can be `uses`d.
+            - uses: actions/checkout@v6
+
+            - name: Download primary kc digests
+              uses: actions/download-artifact@v8
+              with:
+                  path: ${{ runner.temp }}/digests
+                  pattern: digests-${{ needs.discover.outputs.kc_primary }}-*
+                  merge-multiple: true
+
+            - uses: ./.github/actions/docker-setup
+              with:
+                  token: ${{ secrets.GITHUB_TOKEN }}
+
+            - name: Push :latest and inspect
+              working-directory: ${{ runner.temp }}/digests
+              run: |
+                  set -euo pipefail
+                  latest_ref="${{ env.REGISTRY }}/${{ env.IMAGE_REF }}:latest"
+
+                  echo "::group::create :latest manifest"
+                  digest_refs=()
+                  for f in *; do
+                      digest_refs+=("${{ env.REGISTRY }}/${{ env.IMAGE_REF }}@sha256:$f")
+                  done
+                  docker buildx imagetools create -t "$latest_ref" "${digest_refs[@]}"
+                  echo "::endgroup::"
+
+                  echo "::group::inspect :latest"
+                  docker buildx imagetools inspect "$latest_ref"
+                  echo "::endgroup::"
+
+            - name: Summary
+              run: |
+                  {
+                      echo "## Promoted \`:latest\`"
+                      echo ""
+                      echo "\`${{ env.REGISTRY }}/${{ env.IMAGE_REF }}:latest\` was pushed after every other merge finished."
+                      echo "GHCR sorts by recency, so this run pins it on top of the package's tag list."
+                  } >> "$GITHUB_STEP_SUMMARY"

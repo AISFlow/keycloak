@@ -1,0 +1,33 @@
+<!--
+ This file has been claimed for ownership from @oussemasahbeni/keycloakify-login-shadcn version 250004.0.20.
+ To relinquish ownership and restore this file to its original content, run the following command:
+
+ $ npx keycloakify own -t "login/assets/img/auth-logo.svg" -r
+
+ AISFlow brand mark — white rounded card, navy disc, "AIS / FLOW"
+ stacked wordmark with an orange flow swoosh between. Matches the
+ existing AISFlow logo identity. The white card blends on light
+ backgrounds (email bodies, light-mode hero) and frames cleanly on
+ dark / colour backgrounds (dark mode, primary-colour hero panel).
+-->
+<svg width="48" height="48" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg" fill="none">
+    <rect width="48" height="48" rx="10" fill="white" />
+    <circle cx="24" cy="24" r="18" fill="#1B2D5E" />
+
+    <text
+        x="24" y="22" text-anchor="middle"
+        font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Helvetica Neue',Arial,sans-serif"
+        font-size="9.5" font-weight="800" fill="white" letter-spacing="0.5"
+    >AIS</text>
+
+    <path
+        d="M10 27 C 16 23, 22 26, 26 25 S 35 22, 39 20"
+        stroke="#F97316" stroke-width="2.2" stroke-linecap="round" fill="none"
+    />
+
+    <text
+        x="24" y="35" text-anchor="middle"
+        font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Helvetica Neue',Arial,sans-serif"
+        font-size="7.5" font-weight="800" fill="white" letter-spacing="0.6"
+    >FLOW</text>
+</svg>

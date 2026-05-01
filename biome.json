@@ -1,0 +1,78 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.4.13/schema.json",
+	"vcs": {
+		"enabled": true,
+		"clientKind": "git",
+		"useIgnoreFile": true
+	},
+	"files": {
+		"includes": [
+			"**",
+			"!**/dist",
+			"!**/dist_keycloak",
+			"!**/storybook-static",
+			"!src/kc.gen.tsx",
+			"!src/login/index.css",
+			"!src/login/assets/fonts/**/*.css"
+		]
+	},
+	"formatter": {
+		"enabled": true,
+		"indentStyle": "tab"
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"recommended": true
+		}
+	},
+	"javascript": {
+		"formatter": {
+			"jsxQuoteStyle": "single",
+			"trailingCommas": "none",
+			"semicolons": "asNeeded",
+			"lineEnding": "lf",
+			"quoteStyle": "single",
+			"attributePosition": "auto"
+		}
+	},
+	"assist": {
+		"enabled": true,
+		"actions": {
+			"source": {
+				"organizeImports": "on"
+			}
+		}
+	},
+	"overrides": [
+		{
+			"includes": ["src/main-kc.tsx", "src/main-kc.dev.tsx"],
+			"linter": {
+				"rules": {
+					"style": { "noNonNullAssertion": "off" }
+				}
+			}
+		},
+		{
+			"includes": [
+				"src/login/components/**",
+				"src/login/pages/**",
+				"src/login/KcPage.tsx",
+				"src/login/KcContext.ts",
+				"src/login/styleLevelCustomization.tsx",
+				"src/login/shared/**"
+			],
+			"linter": {
+				"rules": {
+					"correctness": { "useExhaustiveDependencies": "off" },
+					"complexity": { "useOptionalChain": "off" },
+					"a11y": {
+						"noLabelWithoutControl": "off",
+						"useValidAnchor": "off"
+					},
+					"security": { "noDangerouslySetInnerHtml": "off" }
+				}
+			}
+		}
+	]
+}

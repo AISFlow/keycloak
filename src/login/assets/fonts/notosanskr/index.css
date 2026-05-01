@@ -1,0 +1,40 @@
+/*
+ * AISFlow theme — Noto Sans KR (Korean + basic Latin) static font set.
+ *
+ * Single woff2 per weight — sourced from Google Fonts gstatic CDN
+ * (Noto Sans KR v39, retrieved via google-webfonts-helper which surfaces
+ * the unsubsetted variant URLs). Each file covers the full Hangul
+ * Syllables block (AC00–D7A3, 11172 glyphs) plus Basic Latin, so a
+ * single download per weight is enough to render the entire login UI.
+ *
+ * Re-sync — when Google publishes a new Noto Sans KR version:
+ *   1. curl 'https://gwfh.mranftl.com/api/fonts/noto-sans-kr?subsets=korean,latin&variants=400,500,700&formats=woff2'
+ *      → copy the `woff2` URL out of each variant
+ *   2. curl -o NotoSansKR-Regular.woff2 <url-for-400>
+ *      curl -o NotoSansKR-Medium.woff2  <url-for-500>
+ *      curl -o NotoSansKR-Bold.woff2    <url-for-700>
+ */
+
+@font-face {
+	font-family: "Noto Sans KR";
+	font-style: normal;
+	font-weight: 400;
+	font-display: swap;
+	src: url("./NotoSansKR-Regular.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "Noto Sans KR";
+	font-style: normal;
+	font-weight: 500;
+	font-display: swap;
+	src: url("./NotoSansKR-Medium.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "Noto Sans KR";
+	font-style: normal;
+	font-weight: 700;
+	font-display: swap;
+	src: url("./NotoSansKR-Bold.woff2") format("woff2");
+}

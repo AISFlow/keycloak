@@ -1,6 +1,14 @@
 # This file is managed by Keycloakify, do not edit it manually.
 
 # === Owned files start ===
+# login/i18n.ts
+# login/index.css
+# login/mocks/getKcContextMock.ts
+# login/assets/img/auth-logo.svg
+# login/assets/img/shape.svg
+# login/components/Template/Template.tsx
+# login/pages/login/Page.stories.tsx
+# login/pages/login/Page.stories.tsx
 # === Owned files end =====
 
 # === @keycloakify/login-ui-storybook v250004.2.0 ===
@@ -13,7 +21,6 @@
 /login/pages/idp-review-user-profile/Page.stories.tsx
 /login/pages/info/Page.stories.tsx
 /login/pages/link-idp-action/Page.stories.tsx
-/login/pages/login/Page.stories.tsx
 /login/pages/login-config-totp/Page.stories.tsx
 /login/pages/login-idp-link-confirm/Page.stories.tsx
 /login/pages/login-idp-link-confirm-override/Page.stories.tsx
@@ -46,8 +53,6 @@
 
 # === @oussemasahbeni/keycloakify-login-shadcn v250004.0.20 ===
 /components/ThemeProvider.tsx
-/login/i18n.ts
-/login/index.css
 /login/KcContext.ts
 /login/KcPage.tsx
 /login/styleLevelCustomization.tsx
@@ -69,15 +74,11 @@
 /components/ui/tooltip.tsx
 /login/components/LogoutOtherSessions.tsx
 /login/components/PasswordVisibilityButton.tsx
-/login/mocks/getKcContextMock.ts
 /login/mocks/KcPageStory.tsx
 /login/pages/PageIndex.tsx
 /login/shared/getColorScheme.ts
 /login/shared/redirectUrlOrigin.ts
-/login/assets/img/auth-logo.svg
-/login/assets/img/shape.svg
 /login/components/Template/index.ts
-/login/components/Template/Template.tsx
 /login/components/Template/useAuthChecker.ts
 /login/components/Template/useInitializeTemplate.ts
 /login/components/ui/Langauges.tsx
@@ -124,7 +125,6 @@
 /login/pages/login/Form.tsx
 /login/pages/login/index.ts
 /login/pages/login/Info.tsx
-/login/pages/login/Page.stories.tsx
 /login/pages/login/Page.tsx
 /login/pages/login/SocialProviders.tsx
 /login/pages/login/useProviderLogos.tsx
