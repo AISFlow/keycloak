@@ -104,7 +104,7 @@ jobs:
                   ls -lh artifacts/
 
             - name: Upload theme jar artifact
-              uses: actions/upload-artifact@v4
+              uses: actions/upload-artifact@v7
               with:
                   name: theme-jar
                   path: artifacts/aisflow.jar
@@ -147,7 +147,7 @@ jobs:
             - uses: actions/checkout@v6
 
             - name: Download theme jar
-              uses: actions/download-artifact@v4
+              uses: actions/download-artifact@v8
               with:
                   name: theme-jar
                   path: .ci-artifacts/
@@ -194,7 +194,7 @@ jobs:
 
             - name: Upload digest
               if: ${{ inputs.push }}
-              uses: actions/upload-artifact@v4
+              uses: actions/upload-artifact@v7
               with:
                   name: digests-${{ matrix.kc.version }}-${{ matrix.platform.arch }}
                   path: ${{ runner.temp }}/digests/*
@@ -236,7 +236,7 @@ jobs:
             - uses: actions/checkout@v6
 
             - name: Download digests
-              uses: actions/download-artifact@v4
+              uses: actions/download-artifact@v8
               with:
                   path: ${{ runner.temp }}/digests
                   pattern: digests-${{ matrix.kc.version }}-*
@@ -377,7 +377,7 @@ jobs:
         timeout-minutes: 5
         steps:
             - name: Download primary kc digests
-              uses: actions/download-artifact@v4
+              uses: actions/download-artifact@v8
               with:
                   path: ${{ runner.temp }}/digests
                   pattern: digests-${{ needs.discover.outputs.kc_primary }}-*

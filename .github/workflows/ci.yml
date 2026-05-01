@@ -99,7 +99,7 @@ jobs:
         run: pnpm run build-keycloak-theme
 
       - name: Upload theme jar
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: theme-jar-build
           path: dist_keycloak/keycloak-theme-*.jar
@@ -145,7 +145,7 @@ jobs:
 
       - name: Download theme jar from verify
         if: steps.tag_check.outputs.released == 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: theme-jar-build
           path: dist_keycloak/
