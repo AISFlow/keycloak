@@ -37,7 +37,13 @@ permissions:
 
 env:
     REGISTRY: ghcr.io
-    IMAGE_NAME: ${{ github.repository_owner }}/keycloak
+    # NOTE: the lowercase image reference is computed at runtime by
+    # `discover` and exposed as `needs.discover.outputs.image_name`,
+    # because OCI repository names MUST be lowercase but
+    # `github.repository_owner` preserves the org's display casing
+    # (e.g. `AISFlow` → push fails with "must be lowercase"). Always
+    # reference the discover output downstream — never interpolate
+    # `repository_owner` directly into an image reference.
     THEME_JAR_NAME: keycloak-theme-for-kc-all-other-versions.jar
 
 jobs:
@@ -50,8 +56,15 @@ jobs:
             kc_primary: ${{ steps.kc.outputs.version }}
             theme_version: ${{ steps.theme.outputs.version }}
             theme_source: ${{ steps.theme.outputs.source }}
+            image_name: ${{ steps.img.outputs.name }}
         steps:
             - uses: actions/checkout@v6
+
+            - name: Compute lowercase image name
+              id: img
+              env:
+                  OWNER: ${{ github.repository_owner }}
+              run: echo "name=${OWNER,,}/keycloak" >> "$GITHUB_OUTPUT"
 
             - name: Resolve Keycloak versions
               id: kc
@@ -179,7 +192,7 @@ jobs:
                   platforms: linux/${{ matrix.platform.arch }}
                   build-args: |
                       KEYCLOAK_VERSION=${{ matrix.kc.version }}
-                  outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+                  outputs: type=image,name=${{ env.REGISTRY }}/${{ needs.discover.outputs.image_name }},push-by-digest=true,name-canonical=true,push=true
                   cache-from: type=gha,scope=kc${{ matrix.kc.major }}-${{ matrix.platform.arch }}
                   cache-to: type=gha,mode=max,scope=kc${{ matrix.kc.major }}-${{ matrix.platform.arch }}
                   provenance: false
@@ -256,7 +269,7 @@ jobs:
               id: meta
               uses: docker/metadata-action@v6
               with:
-                  images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+                  images: ${{ env.REGISTRY }}/${{ needs.discover.outputs.image_name }}
                   flavor: |
                       latest=false
                   tags: |
@@ -323,7 +336,7 @@ jobs:
               working-directory: ${{ runner.temp }}/digests
               run: |
                   set -euo pipefail
-                  latest_ref="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+                  latest_ref="${{ env.REGISTRY }}/${{ needs.discover.outputs.image_name }}:latest"
                   tags=$(jq -cr --arg latest "$latest_ref" \
                       '[.tags[] | select(. != $latest)] | map("-t " + .) | join(" ")' \
                       <<< "$DOCKER_METADATA_OUTPUT_JSON")
@@ -333,12 +346,12 @@ jobs:
                   fi
                   # shellcheck disable=SC2086
                   docker buildx imagetools create $tags \
-                      $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
+                      $(printf '${{ env.REGISTRY }}/${{ needs.discover.outputs.image_name }}@sha256:%s ' *)
 
             - name: Inspect first non-latest tag
               run: |
                   set -euo pipefail
-                  latest_ref="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+                  latest_ref="${{ env.REGISTRY }}/${{ needs.discover.outputs.image_name }}:latest"
                   first_tag=$(jq -cr --arg latest "$latest_ref" \
                       '[.tags[] | select(. != $latest)] | .[0] // empty' \
                       <<< "$DOCKER_METADATA_OUTPUT_JSON")
@@ -399,19 +412,19 @@ jobs:
                   set -euo pipefail
                   ls -1
                   docker buildx imagetools create \
-                      -t "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" \
-                      $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
+                      -t "${{ env.REGISTRY }}/${{ needs.discover.outputs.image_name }}:latest" \
+                      $(printf '${{ env.REGISTRY }}/${{ needs.discover.outputs.image_name }}@sha256:%s ' *)
 
             - name: Inspect :latest
               run: |
                   docker buildx imagetools inspect \
-                      "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+                      "${{ env.REGISTRY }}/${{ needs.discover.outputs.image_name }}:latest"
 
             - name: Summary
               run: |
                   {
                       echo "## Promoted \`:latest\`"
                       echo ""
-                      echo "\`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest\` was pushed after every other merge finished."
+                      echo "\`${{ env.REGISTRY }}/${{ needs.discover.outputs.image_name }}:latest\` was pushed after every other merge finished."
                       echo "GHCR sorts tags by recency, so this run pins \`:latest\` at the top of the package's tag list."
                   } >> "$GITHUB_STEP_SUMMARY"
