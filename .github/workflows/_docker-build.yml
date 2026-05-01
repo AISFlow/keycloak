@@ -172,7 +172,7 @@ jobs:
             - name: Build and push by digest
               if: ${{ inputs.push }}
               id: build
-              uses: docker/build-push-action@v6
+              uses: docker/build-push-action@v7
               with:
                   context: .
                   file: ./Dockerfile
@@ -204,7 +204,7 @@ jobs:
             # PR path: just validate the Dockerfile builds for this arch.
             - name: Build (validate, no push)
               if: ${{ !inputs.push }}
-              uses: docker/build-push-action@v6
+              uses: docker/build-push-action@v7
               with:
                   context: .
                   file: ./Dockerfile
