@@ -2,18 +2,24 @@ name: ci
 
 # ════════════════════════════════════════════════════════════════════
 # Single serialised pipeline for theme code:
-#   verify → release (main only) → docker (theme path)
+#   verify + storybook-preview → release (main only) → docker
 #
 # Trigger paths:
-#   • PR to main           → verify; docker-pr only when Dockerfile /
-#                            KC infra changed (see `changes` job)
-#   • push main            → verify → release → (if version bumped) docker
-#   • push tag v*          → docker only (verify is intentionally
-#                            skipped — the tag is downstream of an
-#                            already-verified main push)
+#   • PR to main   → verify + storybook-preview;
+#                    docker-pr only when Dockerfile / KC infra changed
+#                    (see `changes` job)
+#   • push main    → verify + storybook-preview → release →
+#                    (if version bumped) docker
+#   • push tag v*  → docker only (verify and storybook-preview are
+#                    intentionally skipped — the tag is downstream of
+#                    an already-verified main push)
+#
+# `storybook-preview` doubles as a CI gate: it deploys to Cloudflare
+# Pages and posts a sticky PR comment with the URL. release/docker do
+# not run unless the deploy succeeds (or is legitimately skipped on
+# fork PRs / tag pushes).
 #
 # KC bump (.keycloak-versions only) → docker-kc.yml
-# Storybook PR validation           → storybook.yml
 # ════════════════════════════════════════════════════════════════════
 
 on:
@@ -21,9 +27,10 @@ on:
         branches: [main]
         tags: ["v*"]
         # Doc-only changes don't need verify+docker. NOTE: if `verify` /
-        # `docker-pr` are *required* checks in branch protection, GitHub
-        # treats a path-skipped run as "missing" and PRs can't merge —
-        # pair this with a noop fallback workflow before enforcing on PRs.
+        # `docker-pr` / `storybook-preview` are *required* checks in
+        # branch protection, GitHub treats a path-skipped run as
+        # "missing" and PRs can't merge — pair this with a noop fallback
+        # workflow before enforcing on PRs.
         paths-ignore: &paths_ignore
             - "**.md"
             - "docs/**"
@@ -101,12 +108,155 @@ jobs:
                   if-no-files-found: error
 
     # ────────────────────────────────────────────────────────────────
-    # 2. release — main push only, on package.json version bump.
-    #              Reuses the jar from `verify` (no rebuild).
+    # 2. storybook-preview — build + deploy to Cloudflare Pages.
+    #
+    # Doubles as a CI sentinel: a clean local build sometimes still
+    # fails to deploy (asset count, redirect rules, file size limits,
+    # etc.). Running the deploy here BEFORE release/docker catches
+    # those drift issues at PR/main time, not at release time.
+    #
+    # Behaviour matrix:
+    #   same-repo PR + secrets   → build, deploy `pr-<N>`, sticky comment
+    #   main push    + secrets   → build, deploy `main` (production)
+    #   tag push                 → entire job skipped (already validated)
+    #   fork PR                  → build only (no secret access)
+    #   missing CF secrets       → build only + warning notice
+    #
+    # Required secrets:
+    #   • CLOUDFLARE_API_TOKEN  (Pages:Edit)
+    #   • CLOUDFLARE_ACCOUNT_ID
+    # Required CF setup:
+    #   • Pages project named `${{ env.CF_PROJECT }}` must exist.
+    # ────────────────────────────────────────────────────────────────
+    storybook-preview:
+        name: Storybook preview (Cloudflare Pages)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        runs-on: ubuntu-latest
+        timeout-minutes: 15
+        permissions:
+            contents: read
+            deployments: write
+            pull-requests: write
+        env:
+            CF_PROJECT: aisflow-storybook
+            # Secrets surfaced as env so we can branch on emptiness in
+            # `if:` expressions (you can't reference `secrets.*` directly
+            # in step conditions). The values themselves stay masked.
+            CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+            CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+            # `false` for fork PRs — secrets are unavailable from forks
+            # so the deploy step is skipped (build still gates).
+            SAME_REPO: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+        outputs:
+            url: ${{ steps.deploy.outputs.pages-deployment-alias-url }}
+        steps:
+            - uses: actions/checkout@v6
+
+            - uses: ./.github/actions/setup-toolchain
+              with:
+                  java: "false"
+
+            # FIXME: keycloakify v11 + storybook 10 race condition leaks
+            # `EEXIST: ...keycloakify-dev-resources/.../jquery/dist`.
+            # Retry up to 3× with UV_THREADPOOL_SIZE=1 so a real
+            # (non-race) failure surfaces.
+            - name: Build Storybook (retry on race)
+              env:
+                  UV_THREADPOOL_SIZE: "1"
+              run: |
+                  for attempt in 1 2 3; do
+                      echo "::group::storybook build attempt ${attempt}/3"
+                      if pnpm run build-storybook; then
+                          echo "::endgroup::"
+                          exit 0
+                      fi
+                      echo "::endgroup::"
+                      echo "::warning::storybook build attempt ${attempt} failed"
+                  done
+                  echo "::error::storybook build failed after 3 attempts"
+                  exit 1
+
+            # CF Pages branch name controls the resulting URL:
+            #   • main   → https://<project>.pages.dev (production)
+            #   • pr-<N> → https://pr-N.<project>.pages.dev (preview)
+            - name: Compute deploy branch label
+              id: branch
+              run: |
+                  if [ "${{ github.event_name }}" = "pull_request" ]; then
+                      echo "name=pr-${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+                  else
+                      echo "name=main" >> "$GITHUB_OUTPUT"
+                  fi
+
+            - name: Deploy to Cloudflare Pages
+              id: deploy
+              if: env.CF_TOKEN != '' && env.CF_ACCOUNT != '' && env.SAME_REPO == 'true'
+              uses: cloudflare/wrangler-action@v3
+              with:
+                  apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+                  accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+                  command: pages deploy storybook-static --project-name=${{ env.CF_PROJECT }} --branch=${{ steps.branch.outputs.name }}
+
+            # ── Notices for skipped-deploy paths ────────────────────
+            - name: Notice — CF secrets not configured
+              if: env.SAME_REPO == 'true' && (env.CF_TOKEN == '' || env.CF_ACCOUNT == '')
+              run: |
+                  echo "::warning::CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID not set — Storybook built but not deployed. Add the secrets to enable preview gating."
+
+            - name: Notice — fork PR
+              if: env.SAME_REPO != 'true'
+              run: |
+                  echo "::notice::Fork PR — Storybook built locally but preview deploy skipped (no secret access from forks)."
+
+            # ── Sticky PR comments (mutually exclusive via header) ──
+            - name: Sticky PR comment — preview live
+              if: github.event_name == 'pull_request' && steps.deploy.outcome == 'success'
+              uses: marocchino/sticky-pull-request-comment@v2
+              with:
+                  header: storybook-preview
+                  message: |
+                      📚 **Storybook preview** for this PR is live:
+
+                      🔗 ${{ steps.deploy.outputs.pages-deployment-alias-url }}
+
+                      Built from `${{ github.event.pull_request.head.sha }}`. Updated automatically on each push.
+
+            - name: Sticky PR comment — fork (no preview)
+              if: github.event_name == 'pull_request' && env.SAME_REPO != 'true'
+              uses: marocchino/sticky-pull-request-comment@v2
+              with:
+                  header: storybook-preview
+                  message: |
+                      📚 Storybook built successfully, but preview deploy is skipped for fork PRs (no access to Cloudflare token).
+
+                      Maintainers will validate the rendered Storybook before merging.
+
+            - name: Summary
+              if: always()
+              run: |
+                  {
+                      echo "## Storybook preview"
+                      echo ""
+                      if [ "${{ steps.deploy.outcome }}" = "success" ]; then
+                          echo "✅ Deployed: <${{ steps.deploy.outputs.pages-deployment-alias-url }}>"
+                      elif [ "${{ env.SAME_REPO }}" != "true" ]; then
+                          echo "ℹ️ Fork PR — preview deploy skipped (no secret access)."
+                      elif [ -z "${{ env.CF_TOKEN }}" ] || [ -z "${{ env.CF_ACCOUNT }}" ]; then
+                          echo "⚠️ Cloudflare secrets not configured — built but not deployed."
+                      else
+                          echo "❌ Deploy did not run as expected — see logs."
+                      fi
+                  } >> "$GITHUB_STEP_SUMMARY"
+
+    # ────────────────────────────────────────────────────────────────
+    # 3. release — main push only, on package.json version bump.
+    #              Reuses the jar from `verify` (no rebuild). Gated on
+    #              storybook-preview so a broken Pages deploy blocks
+    #              the GitHub Release.
     # ────────────────────────────────────────────────────────────────
     release:
         name: GitHub Release on version bump
-        needs: verify
+        needs: [verify, storybook-preview]
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         runs-on: ubuntu-latest
         timeout-minutes: 10
@@ -179,16 +329,18 @@ jobs:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     # ────────────────────────────────────────────────────────────────
-    # 3. docker-pr — PR-only validation. Only fires when the PR
+    # 4. docker-pr — PR-only validation. Only fires when the PR
     #                actually touches docker-relevant files. Theme
     #                code changes flow through verify→release→docker
     #                on main; they are *not* what docker-pr validates
     #                (discover always pulls the latest released jar,
-    #                not the PR's jar).
+    #                not the PR's jar). Gated on storybook-preview so
+    #                a Dockerfile-only PR can't sidestep the Pages
+    #                deploy sentinel.
     # ────────────────────────────────────────────────────────────────
     docker-pr:
         name: Docker build (PR, no push)
-        needs: [changes, verify]
+        needs: [changes, verify, storybook-preview]
         if: |
             github.event_name == 'pull_request'
             && needs.changes.outputs.docker == 'true'
@@ -197,17 +349,18 @@ jobs:
             push: false
 
     # ────────────────────────────────────────────────────────────────
-    # 4. docker — fires after release succeeds OR on tag push.
-    #             `verify.result != 'failure'` permits the tag-push
-    #             path where verify is intentionally skipped.
+    # 5. docker — fires after release succeeds OR on tag push.
+    #             `verify` / `storybook-preview` `result != 'failure'`
+    #             permits the tag-push path where both are
+    #             intentionally skipped.
     # ────────────────────────────────────────────────────────────────
     docker:
         name: Docker build & push
-        needs: [verify, release]
+        needs: [verify, storybook-preview, release]
         if: |
             always()
-            && needs.verify.result != 'failure'
-            && needs.verify.result != 'cancelled'
+            && needs.verify.result != 'failure' && needs.verify.result != 'cancelled'
+            && needs.storybook-preview.result != 'failure' && needs.storybook-preview.result != 'cancelled'
             && (
                 (needs.release.result == 'success' && needs.release.outputs.released == 'true')
                 || startsWith(github.ref, 'refs/tags/v')

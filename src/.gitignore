@@ -3,6 +3,7 @@
 # === Owned files start ===
 # login/i18n.ts
 # login/index.css
+# login/mocks/getKcContextMock.ts
 # login/pages/login/Page.stories.tsx
 # login/pages/login/Page.stories.tsx
 # === Owned files end =====
@@ -70,7 +71,6 @@
 /components/ui/tooltip.tsx
 /login/components/LogoutOtherSessions.tsx
 /login/components/PasswordVisibilityButton.tsx
-/login/mocks/getKcContextMock.ts
 /login/mocks/KcPageStory.tsx
 /login/pages/PageIndex.tsx
 /login/shared/getColorScheme.ts
