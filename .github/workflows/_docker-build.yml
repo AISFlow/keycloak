@@ -51,7 +51,7 @@ jobs:
             theme_version: ${{ steps.theme.outputs.version }}
             theme_source: ${{ steps.theme.outputs.source }}
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v6
 
             - name: Resolve Keycloak versions
               id: kc
@@ -144,7 +144,7 @@ jobs:
                     - { runner: ubuntu-latest, arch: amd64 }
                     - { runner: ubuntu-24.04-arm, arch: arm64 }
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v6
 
             - name: Download theme jar
               uses: actions/download-artifact@v4
@@ -233,7 +233,7 @@ jobs:
             matrix:
                 kc: ${{ fromJSON(needs.discover.outputs.matrix) }}
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v6
 
             - name: Download digests
               uses: actions/download-artifact@v4
