@@ -16,7 +16,7 @@
 		"emails:preview": "email preview ./src/email/templates"
 	},
 	"dependencies": {
-		"@keycloakify/login-ui": "~250004.6.5",
+		"@keycloakify/login-ui": "~250004.7.0",
 		"@oussemasahbeni/keycloakify-login-shadcn": "^250004.0.20",
 		"@tailwindcss/vite": "^4.2.1",
 		"class-variance-authority": "^0.7.1",
