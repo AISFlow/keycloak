@@ -62,7 +62,7 @@ jobs:
     outputs:
       docker: ${{ steps.filter.outputs.docker }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - id: filter
         uses: dorny/paths-filter@v3
         with:
@@ -89,7 +89,7 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: ./.github/actions/setup-toolchain
 
@@ -120,7 +120,7 @@ jobs:
       released: ${{ steps.tag_check.outputs.released }}
       version: ${{ steps.pkg.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
