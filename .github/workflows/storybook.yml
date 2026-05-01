@@ -4,6 +4,16 @@ on:
     pull_request:
         branches:
             - main
+        # Storybook only consumes UI source + its own config + dependency
+        # graph. Doc/CI/infra-only PRs don't need a 5-min storybook build.
+        # NOTE: pair with branch-protection adjustments if `Build Storybook`
+        # is a required check (path-skipped runs are reported as missing).
+        paths:
+            - "src/**"
+            - ".storybook/**"
+            - "package.json"
+            - "pnpm-lock.yaml"
+            - ".github/workflows/storybook.yml"
 
 permissions:
     contents: read
@@ -20,23 +30,32 @@ jobs:
         steps:
             - uses: actions/checkout@v4
 
-            - uses: pnpm/action-setup@v4
-
-            - uses: actions/setup-node@v4
+            - uses: ./.github/actions/setup-toolchain
               with:
-                  node-version: 24
-                  cache: pnpm
-
-            - name: Install dependencies
-              run: pnpm install --frozen-lockfile
+                  java: "false"
 
             # FIXME: keycloakify v11 + storybook 10 race condition leaks
-            # `EEXIST: ...keycloakify-dev-resources/.../jquery/dist`
-            - name: Build Storybook
-              continue-on-error: true
+            # `EEXIST: ...keycloakify-dev-resources/.../jquery/dist`.
+            # Retry up to 3× with UV_THREADPOOL_SIZE=1 instead of
+            # `continue-on-error: true` so a real (non-race) failure
+            # actually fails CI.
+            - name: Build Storybook (retry on race)
               env:
                   UV_THREADPOOL_SIZE: "1"
-              run: pnpm run storybook:build
+              run: |
+                  set +e
+                  for attempt in 1 2 3; do
+                      echo "::group::storybook build attempt ${attempt}/3"
+                      pnpm run build-storybook
+                      rc=$?
+                      echo "::endgroup::"
+                      if [ "$rc" -eq 0 ]; then
+                          exit 0
+                      fi
+                      echo "::warning::storybook build attempt ${attempt} failed (rc=${rc})"
+                  done
+                  echo "::error::storybook build failed after 3 attempts"
+                  exit 1
 
             - name: Upload Storybook artifact
               uses: actions/upload-artifact@v4

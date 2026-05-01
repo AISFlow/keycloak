@@ -17,8 +17,24 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+    # Doc-only changes don't need verify+docker. NOTE: if `verify` /
+    # `docker-pr` are *required* checks in branch protection, GitHub
+    # treats a path-skipped run as "missing" and PRs can't merge — pair
+    # this with a noop fallback workflow before enforcing on PRs.
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".gitignore"
+      - ".vscode/**"
+      - "LICENSE"
   pull_request:
     branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".gitignore"
+      - ".vscode/**"
+      - "LICENSE"
 
 permissions:
   contents: write # release job needs to create tags/releases
@@ -33,10 +49,41 @@ concurrency:
 
 jobs:
   # ────────────────────────────────────────────────────────────────
-  # 1. verify — type check + theme jar build (always)
+  # 0. changes — detect whether a PR touched files that the docker
+  #              build actually depends on. Used to gate `docker-pr`
+  #              so theme-only PRs don't rebuild the same Dockerfile +
+  #              latest-released jar combination on every push.
+  # ────────────────────────────────────────────────────────────────
+  changes:
+    name: Detect change scope
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      docker: ${{ steps.filter.outputs.docker }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            docker:
+              - 'Dockerfile'
+              - '.dockerignore'
+              - '.keycloak-versions'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/_docker-build.yml'
+              - '.github/actions/keycloak-version/**'
+
+  # ────────────────────────────────────────────────────────────────
+  # 1. verify — type check + theme jar build.
+  #    Skipped on tag pushes (the tag is a downstream of an already
+  #    verified `main` push that produced the GH Release; the docker
+  #    job pulls its jar from that release, not from a fresh build).
   # ────────────────────────────────────────────────────────────────
   verify:
     name: Type check & theme jar build
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -44,32 +91,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v6
-        with:
-          version: 10
+      - uses: ./.github/actions/setup-toolchain
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 21
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Type check
-        run: pnpm exec tsc --noEmit
-
+      # `tsc -b` already runs as part of `pnpm run build`, which
+      # `build-keycloak-theme` invokes — no need for a separate noEmit pass.
       - name: Build Keycloak theme
         run: pnpm run build-keycloak-theme
 
+      - name: Upload theme jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: theme-jar-build
+          path: dist_keycloak/keycloak-theme-*.jar
+          retention-days: 1
+          if-no-files-found: error
+
   # ────────────────────────────────────────────────────────────────
   # 2. release — main push only, on package.json version bump.
-  #              Creates tag + GitHub Release + jar attach.
+  #              Reuses the jar from `verify` (no rebuild).
   # ────────────────────────────────────────────────────────────────
   release:
     name: GitHub Release on version bump
@@ -80,8 +119,6 @@ jobs:
     outputs:
       released: ${{ steps.tag_check.outputs.released }}
       version: ${{ steps.pkg.outputs.version }}
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v4
         with:
@@ -90,24 +127,6 @@ jobs:
       - name: Resolve Keycloak version
         id: kc
         uses: ./.github/actions/keycloak-version
-
-      - uses: pnpm/action-setup@v6
-        with:
-          version: 10
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 21
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build Keycloak theme
-        run: pnpm run build-keycloak-theme
 
       - name: Read package.json version
         id: pkg
@@ -123,6 +142,13 @@ jobs:
           else
               echo "released=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Download theme jar from verify
+        if: steps.tag_check.outputs.released == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: theme-jar-build
+          path: dist_keycloak/
 
       - name: Create GitHub Release
         if: steps.tag_check.outputs.released == 'true'
@@ -153,8 +179,15 @@ jobs:
   # ────────────────────────────────────────────────────────────────
   docker-pr:
     name: Docker build (PR, no push)
-    needs: verify
-    if: github.event_name == 'pull_request'
+    needs: [changes, verify]
+    # Only fire when the PR actually touches files that affect the
+    # docker build — Dockerfile, KC version list, build infra. Theme
+    # code changes flow through verify→release→docker on main; they
+    # are not what `docker-pr` validates anyway (the discover job
+    # always pulls the *latest released* jar, not the PR's jar).
+    if: |
+      github.event_name == 'pull_request'
+      && needs.changes.outputs.docker == 'true'
     uses: ./.github/workflows/_docker-build.yml
     with:
       push: false
@@ -166,9 +199,12 @@ jobs:
   docker:
     name: Docker build & push
     needs: [verify, release]
+    # `verify.result != 'failure'` permits the tag-push path where
+    # verify is intentionally skipped (see verify's `if:`).
     if: |
       always()
-      && needs.verify.result == 'success'
+      && needs.verify.result != 'failure'
+      && needs.verify.result != 'cancelled'
       && (
           (needs.release.result == 'success' && needs.release.outputs.released == 'true')
           || startsWith(github.ref, 'refs/tags/v')

@@ -10,6 +10,12 @@ name: _docker-build
 #   • semver      → that exact release (theme dispatch / explicit pin)
 #   • the caller may also let this fire from a `tag-push` ref where the
 #     resolver picks the tag itself.
+#
+# Architecture strategy:
+#   amd64 and arm64 build on their NATIVE GitHub-hosted runners
+#   (`ubuntu-latest` and `ubuntu-24.04-arm`) — no QEMU emulation. On
+#   push, each platform pushes by digest only; a separate `merge` job
+#   stitches digests into a single multi-arch tag list.
 
 on:
     workflow_call:
@@ -117,10 +123,15 @@ jobs:
                       echo "| Theme version | \`${{ steps.theme.outputs.version }}\` (${{ steps.theme.outputs.source }}) |"
                   } >> "$GITHUB_STEP_SUMMARY"
 
+    # ──────────────────────────────────────────────────────────────
+    # Build per (kc × platform) on the native runner. No QEMU.
+    #   • push=true  → push by digest only; merge job assembles tags
+    #   • push=false → validate-only build per arch (PR path)
+    # ──────────────────────────────────────────────────────────────
     build:
-        name: kc${{ matrix.kc.major }} (${{ matrix.kc.version }})
+        name: kc${{ matrix.kc.major }} ${{ matrix.platform.arch }}
         needs: discover
-        runs-on: ubuntu-latest
+        runs-on: ${{ matrix.platform.runner }}
         timeout-minutes: 45
         env:
             FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -129,6 +140,9 @@ jobs:
             fail-fast: false
             matrix:
                 kc: ${{ fromJSON(needs.discover.outputs.matrix) }}
+                platform:
+                    - { runner: ubuntu-latest, arch: amd64 }
+                    - { runner: ubuntu-24.04-arm, arch: arm64 }
         steps:
             - uses: actions/checkout@v4
 
@@ -143,16 +157,95 @@ jobs:
                   ls -lh .ci-artifacts/
                   test -s .ci-artifacts/aisflow.jar
 
-            - name: Set up QEMU
-              uses: docker/setup-qemu-action@v3
-              with:
-                  platforms: arm64
-
             - name: Set up Docker Buildx
               uses: docker/setup-buildx-action@v3
 
             - name: Log in to GHCR
               if: ${{ inputs.push }}
+              uses: docker/login-action@v3
+              with:
+                  registry: ${{ env.REGISTRY }}
+                  username: ${{ github.actor }}
+                  password: ${{ secrets.GITHUB_TOKEN }}
+
+            # Push path: emit a digest the merge job can stitch into a manifest.
+            - name: Build and push by digest
+              if: ${{ inputs.push }}
+              id: build
+              uses: docker/build-push-action@v6
+              with:
+                  context: .
+                  file: ./Dockerfile
+                  platforms: linux/${{ matrix.platform.arch }}
+                  build-args: |
+                      KEYCLOAK_VERSION=${{ matrix.kc.version }}
+                  outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+                  cache-from: type=gha,scope=kc${{ matrix.kc.major }}-${{ matrix.platform.arch }}
+                  cache-to: type=gha,mode=max,scope=kc${{ matrix.kc.major }}-${{ matrix.platform.arch }}
+                  provenance: false
+
+            - name: Export digest
+              if: ${{ inputs.push }}
+              run: |
+                  set -euo pipefail
+                  mkdir -p "${{ runner.temp }}/digests"
+                  digest="${{ steps.build.outputs.digest }}"
+                  touch "${{ runner.temp }}/digests/${digest#sha256:}"
+
+            - name: Upload digest
+              if: ${{ inputs.push }}
+              uses: actions/upload-artifact@v4
+              with:
+                  name: digests-${{ matrix.kc.version }}-${{ matrix.platform.arch }}
+                  path: ${{ runner.temp }}/digests/*
+                  if-no-files-found: error
+                  retention-days: 1
+
+            # PR path: just validate the Dockerfile builds for this arch.
+            - name: Build (validate, no push)
+              if: ${{ !inputs.push }}
+              uses: docker/build-push-action@v6
+              with:
+                  context: .
+                  file: ./Dockerfile
+                  platforms: linux/${{ matrix.platform.arch }}
+                  build-args: |
+                      KEYCLOAK_VERSION=${{ matrix.kc.version }}
+                  push: false
+                  cache-from: type=gha,scope=kc${{ matrix.kc.major }}-${{ matrix.platform.arch }}
+                  cache-to: type=gha,mode=max,scope=kc${{ matrix.kc.major }}-${{ matrix.platform.arch }}
+                  provenance: false
+
+    # ──────────────────────────────────────────────────────────────
+    # Stitch per-arch digests into a multi-arch manifest list and
+    # push under the full tag taxonomy. Push runs only.
+    # ──────────────────────────────────────────────────────────────
+    merge:
+        name: kc${{ matrix.kc.major }} manifest
+        needs: [discover, build]
+        if: ${{ inputs.push }}
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        env:
+            THEME_VERSION: ${{ needs.discover.outputs.theme_version }}
+        strategy:
+            fail-fast: false
+            matrix:
+                kc: ${{ fromJSON(needs.discover.outputs.matrix) }}
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Download digests
+              uses: actions/download-artifact@v4
+              with:
+                  path: ${{ runner.temp }}/digests
+                  pattern: digests-${{ matrix.kc.version }}-*
+                  merge-multiple: true
+
+            - name: Set up Docker Buildx
+              uses: docker/setup-buildx-action@v3
+
+            - name: Log in to GHCR
               uses: docker/login-action@v3
               with:
                   registry: ${{ env.REGISTRY }}
@@ -207,9 +300,6 @@ jobs:
                       type=raw,value=${{ env.THEME_VERSION }}-kc${{ matrix.kc.line }},enable={{is_default_branch}}
                       type=raw,value=${{ env.THEME_VERSION }}-kc${{ matrix.kc.major }},enable={{is_default_branch}}
 
-                      # ── PR debug ──
-                      type=ref,event=pr,suffix=-kc${{ matrix.kc.major }}
-
                       # ── Commit SHA, scoped to KC major ──
                       type=sha,prefix=sha-,suffix=-kc${{ matrix.kc.major }},format=short
                   labels: |
@@ -225,20 +315,36 @@ jobs:
                       io.aisflow.theme.source=${{ needs.discover.outputs.theme_source }}
                       io.aisflow.combined.version=${{ env.THEME_VERSION }}-kc${{ matrix.kc.version }}
 
-            - name: Build${{ inputs.push && ' and push' || '' }} (linux/amd64, linux/arm64)
-              uses: docker/build-push-action@v6
-              with:
-                  context: .
-                  file: ./Dockerfile
-                  platforms: linux/amd64,linux/arm64
-                  push: ${{ inputs.push }}
-                  build-args: |
-                      KEYCLOAK_VERSION=${{ matrix.kc.version }}
-                  tags: ${{ steps.meta.outputs.tags }}
-                  labels: ${{ steps.meta.outputs.labels }}
-                  cache-from: type=gha,scope=kc${{ matrix.kc.major }}
-                  cache-to: type=gha,mode=max,scope=kc${{ matrix.kc.major }}
-                  provenance: false
+            # `latest` is intentionally excluded here — a dedicated
+            # `promote-latest` job re-pushes it AFTER every other merge
+            # finishes so its publish timestamp is the freshest, which
+            # makes GHCR sort it at the top of the package's tag list.
+            - name: Create manifest list and push (excluding :latest)
+              working-directory: ${{ runner.temp }}/digests
+              run: |
+                  set -euo pipefail
+                  latest_ref="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+                  tags=$(jq -cr --arg latest "$latest_ref" \
+                      '[.tags[] | select(. != $latest)] | map("-t " + .) | join(" ")' \
+                      <<< "$DOCKER_METADATA_OUTPUT_JSON")
+                  if [ -z "$tags" ]; then
+                      echo "::notice::no non-latest tags to create — skipping"
+                      exit 0
+                  fi
+                  # shellcheck disable=SC2086
+                  docker buildx imagetools create $tags \
+                      $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
+
+            - name: Inspect first non-latest tag
+              run: |
+                  set -euo pipefail
+                  latest_ref="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+                  first_tag=$(jq -cr --arg latest "$latest_ref" \
+                      '[.tags[] | select(. != $latest)] | .[0] // empty' \
+                      <<< "$DOCKER_METADATA_OUTPUT_JSON")
+                  if [ -n "$first_tag" ]; then
+                      docker buildx imagetools inspect "$first_tag"
+                  fi
 
             - name: Summary
               run: |
@@ -247,8 +353,65 @@ jobs:
                       echo ""
                       echo "Theme: \`${{ env.THEME_VERSION }}\` (${{ needs.discover.outputs.theme_source }})"
                       echo ""
-                      echo "**Tags${{ inputs.push && ' pushed' || ' (build-only, not pushed)' }}**:"
+                      echo "**Tags pushed (excluding \`:latest\`)**:"
                       echo '```'
                       echo "${{ steps.meta.outputs.tags }}"
                       echo '```'
+                      if [[ "${{ matrix.kc.is_primary }}" == "true" && "$GITHUB_REF" == "refs/heads/${{ github.event.repository.default_branch }}" ]]; then
+                          echo ""
+                          echo "_\`:latest\` is promoted by the \`promote-latest\` job after all merges finish._"
+                      fi
+                  } >> "$GITHUB_STEP_SUMMARY"
+
+    # ──────────────────────────────────────────────────────────────
+    # Push `:latest` LAST so its publish timestamp is the most recent
+    # across the package, keeping it at the top of GHCR's tag list
+    # (GHCR sorts by recency). Skipped on tag pushes and PRs by the
+    # same default-branch guard the `merge` step uses.
+    # ──────────────────────────────────────────────────────────────
+    promote-latest:
+        name: Promote :latest tag
+        needs: [discover, merge]
+        if: ${{ inputs.push && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+        runs-on: ubuntu-latest
+        timeout-minutes: 5
+        steps:
+            - name: Download primary kc digests
+              uses: actions/download-artifact@v4
+              with:
+                  path: ${{ runner.temp }}/digests
+                  pattern: digests-${{ needs.discover.outputs.kc_primary }}-*
+                  merge-multiple: true
+
+            - name: Set up Docker Buildx
+              uses: docker/setup-buildx-action@v3
+
+            - name: Log in to GHCR
+              uses: docker/login-action@v3
+              with:
+                  registry: ${{ env.REGISTRY }}
+                  username: ${{ github.actor }}
+                  password: ${{ secrets.GITHUB_TOKEN }}
+
+            - name: Push :latest (final, on top of GHCR)
+              working-directory: ${{ runner.temp }}/digests
+              run: |
+                  set -euo pipefail
+                  ls -1
+                  docker buildx imagetools create \
+                      -t "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" \
+                      $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
+
+            - name: Inspect :latest
+              run: |
+                  docker buildx imagetools inspect \
+                      "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+
+            - name: Summary
+              run: |
+                  {
+                      echo "## Promoted \`:latest\`"
+                      echo ""
+                      echo "\`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest\` was pushed after every other merge finished."
+                      echo "GHCR sorts tags by recency, so this run pins \`:latest\` at the top of the package's tag list."
                   } >> "$GITHUB_STEP_SUMMARY"

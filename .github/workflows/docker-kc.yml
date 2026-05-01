@@ -5,9 +5,13 @@ name: docker-kc
 # already-released theme jar.
 #
 # Fires ONLY when:
-#   • `.keycloak-versions` is changed on main
-#   • Dockerfile / docker-build infra is changed on main
+#   • `.keycloak-versions` is changed on main (the actual KC bump signal)
 #   • someone manually dispatches
+#
+# Dockerfile / build infra changes are validated by ci.yml's `docker-pr`
+# on the way in, and applied to all kc images via the next real KC bump
+# (or via manual dispatch). PR validation here was redundant with
+# ci.yml's `docker-pr` job — removed.
 #
 # Theme code changes do NOT fire here — those go through ci.yml's
 # verify→release→docker pipeline.
@@ -18,20 +22,6 @@ on:
         branches: [main]
         paths:
             - ".keycloak-versions"
-            - "Dockerfile"
-            - ".dockerignore"
-            - ".github/workflows/_docker-build.yml"
-            - ".github/workflows/docker-kc.yml"
-            - ".github/actions/keycloak-version/**"
-    pull_request:
-        branches: [main]
-        paths:
-            - ".keycloak-versions"
-            - "Dockerfile"
-            - ".dockerignore"
-            - ".github/workflows/_docker-build.yml"
-            - ".github/workflows/docker-kc.yml"
-            - ".github/actions/keycloak-version/**"
     workflow_dispatch:
         inputs:
             theme_version:
@@ -53,4 +43,4 @@ jobs:
         uses: ./.github/workflows/_docker-build.yml
         with:
             theme_version: ${{ inputs.theme_version || '' }}
-            push: ${{ github.event_name != 'pull_request' }}
+            push: true
