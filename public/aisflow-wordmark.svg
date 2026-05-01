@@ -1,0 +1,42 @@
+<!--
+  AISFlow wordmark — full-width brand lockup for email headers.
+  Composition: brand mark on the left (white card + navy disc +
+  "AIS/FLOW" stack + orange swoosh), "AISFlow" wordmark on the right.
+
+  Intended consumption: src/email/constants.ts `companyLogo` URL,
+  served via a public raw URL (e.g. raw.githubusercontent.com).
+  Text uses a system-font stack — some email clients may substitute
+  the typeface; convert <text> to <path> if exact rendering matters.
+-->
+<svg width="240" height="60" viewBox="0 0 240 60" xmlns="http://www.w3.org/2000/svg" fill="none">
+    <!-- ── brand mark ─────────────────────────────────────────── -->
+    <g transform="translate(6 6)">
+        <rect width="48" height="48" rx="10" fill="white" />
+        <circle cx="24" cy="24" r="18" fill="#1B2D5E" />
+
+        <text
+            x="24" y="22" text-anchor="middle"
+            font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Helvetica Neue',Arial,sans-serif"
+            font-size="9.5" font-weight="800" fill="white" letter-spacing="0.5"
+        >AIS</text>
+
+        <path
+            d="M10 27 C 16 23, 22 26, 26 25 S 35 22, 39 20"
+            stroke="#F97316" stroke-width="2.2" stroke-linecap="round" fill="none"
+        />
+
+        <text
+            x="24" y="35" text-anchor="middle"
+            font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Helvetica Neue',Arial,sans-serif"
+            font-size="7.5" font-weight="800" fill="white" letter-spacing="0.6"
+        >FLOW</text>
+    </g>
+
+    <!-- ── wordmark ───────────────────────────────────────────── -->
+    <text
+        x="68" y="38"
+        font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Inter,Roboto,Arial,sans-serif"
+        font-size="26" font-weight="700" letter-spacing="-0.5"
+        fill="#1B2D5E"
+    >AISFlow</text>
+</svg>

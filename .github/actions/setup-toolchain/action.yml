@@ -1,0 +1,49 @@
+name: Setup toolchain
+description: |
+    Pins pnpm 10 / Node 24 / (optionally) Temurin 21 across all CI jobs,
+    runs `pnpm install --frozen-lockfile`, and explicitly invokes
+    `keycloakify sync-extensions` to materialise the gitignored mock
+    sources under `src/login/mocks/`. Without that explicit invocation
+    `tsc -b` has been observed to fail with TS2307 in CI when the
+    package's own `postinstall` skips the src/ sync.
+
+inputs:
+    java:
+        description: 'Install Temurin Java 21 (set "false" to skip).'
+        required: false
+        default: "true"
+    install:
+        description: 'Run `pnpm install --frozen-lockfile` + sync-extensions (set "false" to skip).'
+        required: false
+        default: "true"
+
+runs:
+    using: composite
+    steps:
+        - uses: pnpm/action-setup@v6
+          with:
+              version: 10
+
+        - uses: actions/setup-node@v6
+          with:
+              node-version: 24
+              cache: pnpm
+
+        - if: inputs.java == 'true'
+          uses: actions/setup-java@v5
+          with:
+              distribution: temurin
+              java-version: 21
+
+        - if: inputs.install == 'true'
+          shell: bash
+          run: pnpm install --frozen-lockfile
+
+        # `src/login/mocks/*.{tsx,ts}` are gitignored and produced by
+        # `keycloakify sync-extensions`. The package's `postinstall`
+        # already calls it, but in CI we've seen the src/ sync skipped —
+        # `tsc -b` then fails with TS2307. Running it again here is
+        # idempotent and guarantees the files exist before any build.
+        - if: inputs.install == 'true'
+          shell: bash
+          run: pnpm exec keycloakify sync-extensions

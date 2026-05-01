@@ -1,0 +1,111 @@
+{
+	"email-test": {
+		"subject": "이메일 테스트",
+		"greeting": "안녕하세요.",
+		"message": "{{realmName}} 테스트 메일입니다. 이 메일을 받으셨다면 이메일 설정이 정상입니다."
+	},
+	"email-update-confirmation": {
+		"subject": "새 이메일 인증",
+		"linkExpiration": "이 링크의 유효 기간은 {{expiration}}입니다.",
+		"updateEmailAddress": "{{realmName}} 계정 이메일을 {{newEmail}}(으)로 변경하려면",
+		"clickLinkBelow": "아래 링크를 클릭해 주세요.",
+		"updateEmail": "이메일 변경",
+		"ignoreMessage": "변경을 원치 않으시면 이 메일을 무시해 주세요."
+	},
+	"email-verification": {
+		"subject": "이메일 인증 안내",
+		"message1": "이 이메일로 {{firstName}} 계정이 생성되었습니다.",
+		"message2": "본인이 가입했다면 아래 링크로 인증해 주세요.",
+		"verifyButton": "이메일 인증",
+		"linkExpiration": "이 링크의 유효 기간은 {{expiration}}입니다.",
+		"ignoreMessage": "본인이 아니라면 이 메일을 무시해 주세요."
+	},
+	"event-login_error": {
+		"subject": "로그인 오류 안내",
+		"message": "{{date}}에 {{ipAddress}}에서 로그인 실패 기록이 있습니다.",
+		"contactAdmin": "본인이 아니라면 관리자에게 문의해 주세요."
+	},
+	"event-remove_credential": {
+		"subject": "인증 정보 삭제 안내",
+		"message": "{{date}}에 {{ipAddress}}에서 {{credentialType}} 인증 정보가 삭제되었습니다.",
+		"contactAdmin": "본인이 아니라면 관리자에게 문의해 주세요."
+	},
+	"event-remove_totp": {
+		"subject": "OTP 삭제 안내",
+		"message": "{{date}}에 {{ipAddress}}에서 계정 OTP가 삭제되었습니다.",
+		"contactAdmin": "본인이 아니라면 관리자에게 문의해 주세요."
+	},
+	"event-update_credential": {
+		"subject": "인증 정보 업데이트 안내",
+		"message": "{{date}}에 {{ipAddress}}에서 {{credentialType}} 인증 정보가 변경되었습니다.",
+		"contactAdmin": "본인이 아니라면 관리자에게 문의해 주세요."
+	},
+	"event-update_password": {
+		"subject": "비밀번호 변경 안내",
+		"message": "{{date}}에 {{ipAddress}}에서 비밀번호가 변경되었습니다.",
+		"contactAdmin": "본인이 아니라면 관리자에게 문의해 주세요."
+	},
+	"event-update_totp": {
+		"subject": "OTP 업데이트 안내",
+		"message": "{{date}}에 {{ipAddress}}에서 계정 OTP가 변경되었습니다.",
+		"contactAdmin": "본인이 아니라면 관리자에게 문의해 주세요."
+	},
+	"event-user_disabled_by_permanent_lockout": {
+		"subject": "로그인 실패로 인한 계정 영구 차단 안내",
+		"message": "{{date}} 기준 로그인 다수 실패로 계정이 영구 차단되었습니다.",
+		"contactAdmin": "관리자에게 문의해 주세요."
+	},
+	"event-user_disabled_by_temporary_lockout": {
+		"subject": "로그인 실패로 인한 계정 일시 차단 안내",
+		"message": "{{date}} 기준 로그인 다수 실패로 계정이 일시 차단되었습니다.",
+		"contactAdmin": "관리자에게 문의해 주세요."
+	},
+	"executeActions": {
+		"subject": "계정 정보 업데이트 안내",
+		"message": "관리자가 {{realmName}} 계정 정보 업데이트를 요청했습니다.",
+		"clickLink": "아래 링크를 클릭해 업데이트를 진행해 주세요.",
+		"linkExpiration": "이 링크의 유효 기간은 {{expiration}}입니다.",
+		"ignoreMessage": "요청한 적이 없다면 이 메일을 무시해 주세요. 기존 정보가 유지됩니다.",
+		"updateAccountButton": "계정 업데이트"
+	},
+	"identity-provider-link": {
+		"subject": "계정에 {0} 서비스 연결 안내",
+		"message": "{{identityProviderDisplayName}} 계정을 {{username}}님의 {{realmName}} 계정에 연결하려고 합니다.",
+		"clickLink": "본인이 맞다면 아래 링크로 연결해 주세요.",
+		"linkExpiration": "이 링크의 유효 기간은 {{expiration}}입니다.",
+		"ignoreMessage": "연결을 원치 않으시면 이 메일을 무시해 주세요.",
+		"linkAccountsButton": "계정 연결",
+		"loginInfo": "연결 시 {{realmName}} 계정으로 {{identityProviderDisplayName}}에 간편하게 로그인할 수 있습니다."
+	},
+	"org-invite": {
+		"subject": "{0} 조직 초대 안내",
+		"greeting": "안녕하세요, {{firstName}} {{lastName}}님.",
+		"message": "{{organizationName}} 조직에 초대되었습니다. 아래 링크로 가입해 주세요.",
+		"linkExpiration": "이 링크의 유효 기간은 {{expiration}}입니다.",
+		"ignoreMessage": "가입을 원치 않으시면 이 메일을 무시해 주세요.",
+		"joinButton": "조직 가입"
+	},
+	"password-reset": {
+		"subject": "비밀번호 재설정 안내",
+		"message1": "{{realmName}} 계정 인증 정보 변경이 요청되었습니다.",
+		"message2": "본인이라면 아래 링크로 재설정해 주세요.",
+		"linkExpiration": "이 링크의 유효 기간은 {{expiration}}입니다.",
+		"ignoreMessage": "변경을 원치 않으시면 이 메일을 무시해 주세요. 기존 정보가 유지됩니다.",
+		"resetButton": "인증 정보 재설정"
+	},
+	"requiredAction": {
+		"configure_totp": "OTP 설정",
+		"terms_and_conditions": "이용 약관",
+		"update_password": "비밀번호 변경",
+		"update_profile": "프로필 수정",
+		"verify_email": "이메일 인증",
+		"configure_recovery_authn_codes": "복구 코드 생성",
+		"seconds": "{0,choice,0#초|1#초|1<초}",
+		"minutes": "{0,choice,0#분|1#분|1<분}",
+		"hours": "{0,choice,0#시간|1#시간|1<시간}",
+		"days": "{0,choice,0#일|1#일|1<일}"
+	},
+	"footer": {
+		"allRightsReserved": "© {{currentYear}} {{realmName}}, All Rights Reserved"
+	}
+}

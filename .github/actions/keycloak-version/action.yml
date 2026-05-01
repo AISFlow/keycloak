@@ -1,0 +1,100 @@
+name: Resolve Keycloak versions
+description: |
+    Reads .keycloak-versions (one MAJOR.MINOR.PATCH per line, first line is the
+    "primary" version that floating tags like `latest` follow). Emits both:
+
+      • single-version outputs  → for jobs that build/release just one image
+      • a JSON matrix output    → for jobs that fan out across all supported
+                                   versions (back-compat builds)
+
+outputs:
+    # ── Primary (first line) ───────────────────────────────────────
+    version:
+        description: Primary full version (e.g. 26.0.7)
+        value: ${{ steps.resolve.outputs.version }}
+    line:
+        description: Primary major.minor (e.g. 26.0)
+        value: ${{ steps.resolve.outputs.line }}
+    major:
+        description: Primary major (e.g. 26)
+        value: ${{ steps.resolve.outputs.major }}
+
+    # ── All supported versions ────────────────────────────────────
+    matrix:
+        description: |
+            JSON array of {version, line, major, is_primary}. Feed into a
+            strategy.matrix.kc with fromJSON().
+        value: ${{ steps.resolve.outputs.matrix }}
+    versions:
+        description: Space-separated list of all supported versions.
+        value: ${{ steps.resolve.outputs.versions }}
+
+runs:
+    using: composite
+    steps:
+        - id: resolve
+          shell: bash
+          run: |
+              set -euo pipefail
+
+              if [ ! -f .keycloak-versions ]; then
+                  echo "::error file=.keycloak-versions::missing — required for KC version resolution"
+                  exit 1
+              fi
+
+              # Read line-by-line, trim whitespace per line, drop blanks/comments
+              mapfile -t raw < .keycloak-versions
+              lines=()
+              for v in "${raw[@]}"; do
+                  v="${v//[[:space:]]/}"
+                  [[ -z "$v" || "$v" == \#* ]] && continue
+                  lines+=("$v")
+              done
+
+              if [ ${#lines[@]} -eq 0 ]; then
+                  echo "::error file=.keycloak-versions::no versions listed"
+                  exit 1
+              fi
+
+              for v in "${lines[@]}"; do
+                  if [[ ! "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                      echo "::error file=.keycloak-versions::invalid version '$v' — expected MAJOR.MINOR.PATCH"
+                      exit 1
+                  fi
+              done
+
+              primary="${lines[0]}"
+              line="${primary%.*}"
+              major="${primary%%.*}"
+
+              # Build JSON matrix
+              json="["
+              sep=""
+              for v in "${lines[@]}"; do
+                  l="${v%.*}"
+                  m="${v%%.*}"
+                  is_primary=false
+                  [ "$v" = "$primary" ] && is_primary=true
+                  json+="${sep}{\"version\":\"$v\",\"line\":\"$l\",\"major\":\"$m\",\"is_primary\":$is_primary}"
+                  sep=","
+              done
+              json+="]"
+
+              {
+                  echo "version=$primary"
+                  echo "line=$line"
+                  echo "major=$major"
+                  echo "matrix=$json"
+                  echo "versions=${lines[*]}"
+              } >> "$GITHUB_OUTPUT"
+
+              {
+                  echo "### Keycloak versions"
+                  echo ""
+                  echo "Primary: \`$primary\` (line $line · major $major)"
+                  echo ""
+                  echo "All supported (back-compat):"
+                  for v in "${lines[@]}"; do echo "- \`$v\`"; done
+              } >> "$GITHUB_STEP_SUMMARY"
+
+              echo "::notice title=Keycloak primary::$primary"
