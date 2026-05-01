@@ -225,6 +225,11 @@ jobs:
             matrix:
                 kc: ${{ fromJSON(needs.discover.outputs.matrix) }}
         steps:
+            # Required even though this job doesn't build from source —
+            # `./.github/actions/docker-setup` is a local composite action,
+            # so its action.yml must be present on the runner.
+            - uses: actions/checkout@v6
+
             - name: Download digests
               uses: actions/download-artifact@v8
               with:
@@ -354,6 +359,10 @@ jobs:
         env:
             IMAGE_REF: ${{ needs.discover.outputs.image_name }}
         steps:
+            # `./.github/actions/docker-setup` is a local composite action;
+            # its action.yml must be checked out before it can be `uses`d.
+            - uses: actions/checkout@v6
+
             - name: Download primary kc digests
               uses: actions/download-artifact@v8
               with:
