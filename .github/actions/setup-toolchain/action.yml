@@ -44,3 +44,15 @@ runs:
         - if: inputs.install == 'true'
           shell: bash
           run: pnpm install --frozen-lockfile
+
+        # Belt-and-suspenders: regenerate the keycloakify-managed sources
+        # (e.g. `src/login/mocks/KcPageStory.tsx`, `getKcContextMock.ts`)
+        # explicitly. These files are gitignored in `src/.gitignore` and
+        # are normally produced by the `postinstall` script, but in some
+        # CI conditions (cache restore + frozen lockfile) the postinstall
+        # has been observed to skip the src/ sync — leaving `tsc -b` to
+        # fail with TS2307 on the mock imports. Running sync-extensions
+        # explicitly here is idempotent and guarantees the files exist.
+        - if: inputs.install == 'true'
+          shell: bash
+          run: pnpm exec keycloakify sync-extensions
