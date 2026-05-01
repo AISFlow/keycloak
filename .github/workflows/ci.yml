@@ -5,221 +5,214 @@ name: ci
 #   verify → release (main only) → docker (theme path)
 #
 # Trigger paths:
-#   • PR to main           → verify, then docker (build-only, no push)
+#   • PR to main           → verify; docker-pr only when Dockerfile /
+#                            KC infra changed (see `changes` job)
 #   • push main            → verify → release → (if version bumped) docker
-#   • push tag v*          → verify → docker (release jar pinned to tag)
+#   • push tag v*          → docker only (verify is intentionally
+#                            skipped — the tag is downstream of an
+#                            already-verified main push)
 #
-# KC bump (.keycloak-versions only) is handled by docker-kc.yml.
-# Storybook PR validation is handled by storybook.yml.
+# KC bump (.keycloak-versions only) → docker-kc.yml
+# Storybook PR validation           → storybook.yml
 # ════════════════════════════════════════════════════════════════════
 
 on:
-  push:
-    branches: [main]
-    tags: ["v*"]
-    # Doc-only changes don't need verify+docker. NOTE: if `verify` /
-    # `docker-pr` are *required* checks in branch protection, GitHub
-    # treats a path-skipped run as "missing" and PRs can't merge — pair
-    # this with a noop fallback workflow before enforcing on PRs.
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
-      - ".gitignore"
-      - ".vscode/**"
-      - "LICENSE"
-  pull_request:
-    branches: [main]
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
-      - ".gitignore"
-      - ".vscode/**"
-      - "LICENSE"
+    push:
+        branches: [main]
+        tags: ["v*"]
+        # Doc-only changes don't need verify+docker. NOTE: if `verify` /
+        # `docker-pr` are *required* checks in branch protection, GitHub
+        # treats a path-skipped run as "missing" and PRs can't merge —
+        # pair this with a noop fallback workflow before enforcing on PRs.
+        paths-ignore: &paths_ignore
+            - "**.md"
+            - "docs/**"
+            - ".gitignore"
+            - ".vscode/**"
+            - "LICENSE"
+    pull_request:
+        branches: [main]
+        paths-ignore: *paths_ignore
 
 permissions:
-  contents: write # release job needs to create tags/releases
-  packages: write # docker job pushes to GHCR
+    contents: write # release job creates tags/releases
+    packages: write # docker job pushes to GHCR
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  # Cancel in-flight runs on the same ref EXCEPT for tag pushes —
-  # tags are immutable; cancelling a release-tag build risks a half
-  # released artefact.
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    group: ${{ github.workflow }}-${{ github.ref }}
+    # Cancel in-flight runs on the same ref EXCEPT for tag pushes —
+    # tags are immutable; cancelling a release-tag build risks a
+    # half-released artefact.
+    cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
-  # ────────────────────────────────────────────────────────────────
-  # 0. changes — detect whether a PR touched files that the docker
-  #              build actually depends on. Used to gate `docker-pr`
-  #              so theme-only PRs don't rebuild the same Dockerfile +
-  #              latest-released jar combination on every push.
-  # ────────────────────────────────────────────────────────────────
-  changes:
-    name: Detect change scope
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    outputs:
-      docker: ${{ steps.filter.outputs.docker }}
-    steps:
-      - uses: actions/checkout@v6
-      - id: filter
-        uses: dorny/paths-filter@v4
+    # ────────────────────────────────────────────────────────────────
+    # 0. changes — gate `docker-pr` so theme-only PRs don't repeat
+    #              the same Dockerfile + latest-released-jar build.
+    # ────────────────────────────────────────────────────────────────
+    changes:
+        name: Detect change scope
+        if: github.event_name == 'pull_request'
+        runs-on: ubuntu-latest
+        timeout-minutes: 2
+        outputs:
+            docker: ${{ steps.filter.outputs.docker }}
+        steps:
+            - uses: actions/checkout@v6
+            - id: filter
+              uses: dorny/paths-filter@v4
+              with:
+                  filters: |
+                      docker:
+                          - 'Dockerfile'
+                          - '.dockerignore'
+                          - '.keycloak-versions'
+                          - '.github/workflows/ci.yml'
+                          - '.github/workflows/_docker-build.yml'
+                          - '.github/actions/keycloak-version/**'
+                          - '.github/actions/docker-setup/**'
+
+    # ────────────────────────────────────────────────────────────────
+    # 1. verify — type check + theme jar build. Skipped on tag pushes
+    #             (the tag is downstream of an already-verified main
+    #             push that produced the GH Release; the docker job
+    #             pulls its jar from that release).
+    # ────────────────────────────────────────────────────────────────
+    verify:
+        name: Type check & theme jar build
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        steps:
+            - uses: actions/checkout@v6
+            - uses: ./.github/actions/setup-toolchain
+
+            # `tsc -b` runs as part of `pnpm run build`, which
+            # `build-keycloak-theme` invokes — no separate noEmit pass.
+            - name: Build Keycloak theme
+              run: pnpm run build-keycloak-theme
+
+            - name: Upload theme jar
+              uses: actions/upload-artifact@v7
+              with:
+                  name: theme-jar-build
+                  path: dist_keycloak/keycloak-theme-*.jar
+                  retention-days: 1
+                  if-no-files-found: error
+
+    # ────────────────────────────────────────────────────────────────
+    # 2. release — main push only, on package.json version bump.
+    #              Reuses the jar from `verify` (no rebuild).
+    # ────────────────────────────────────────────────────────────────
+    release:
+        name: GitHub Release on version bump
+        needs: verify
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        outputs:
+            released: ${{ steps.pkg.outputs.released }}
+            version: ${{ steps.pkg.outputs.version }}
+        steps:
+            - uses: actions/checkout@v6
+              with:
+                  fetch-depth: 0
+
+            - name: Resolve Keycloak version
+              id: kc
+              uses: ./.github/actions/keycloak-version
+
+            # Read package.json version + check whether the tag already
+            # exists. Single step: tightly coupled, both run in seconds.
+            - name: Resolve theme version & tag state
+              id: pkg
+              run: |
+                  set -euo pipefail
+                  version=$(node -p "require('./package.json').version")
+                  git fetch --tags
+                  if git rev-parse "v$version" >/dev/null 2>&1; then
+                      released=false
+                      echo "::notice::v$version already released — skipping"
+                  else
+                      released=true
+                  fi
+                  { echo "version=$version"; echo "released=$released"; } >> "$GITHUB_OUTPUT"
+
+            - name: Download theme jar from verify
+              if: steps.pkg.outputs.released == 'true'
+              uses: actions/download-artifact@v8
+              with:
+                  name: theme-jar-build
+                  path: dist_keycloak/
+
+            # Lowercase image owner for the release body link
+            # (OCI repository names must be lowercase).
+            - name: Compute lowercase image name
+              id: img
+              if: steps.pkg.outputs.released == 'true'
+              env:
+                  OWNER: ${{ github.repository_owner }}
+              run: echo "name=${OWNER,,}/keycloak" >> "$GITHUB_OUTPUT"
+
+            - name: Create GitHub Release
+              if: steps.pkg.outputs.released == 'true'
+              uses: softprops/action-gh-release@v3
+              with:
+                  name: Release v${{ steps.pkg.outputs.version }} (kc${{ steps.kc.outputs.version }})
+                  tag_name: v${{ steps.pkg.outputs.version }}
+                  generate_release_notes: true
+                  draft: false
+                  prerelease: ${{ contains(steps.pkg.outputs.version, '-') }}
+                  body: |
+                      Built against **Keycloak ${{ steps.kc.outputs.version }}**.
+
+                      Docker image (multi-arch, GHCR):
+
+                      ```
+                      ghcr.io/${{ steps.img.outputs.name }}:${{ steps.pkg.outputs.version }}-kc${{ steps.kc.outputs.version }}
+                      ```
+
+                      Other tags published for this release: `${{ steps.pkg.outputs.version }}`, `${{ steps.pkg.outputs.version }}-kc${{ steps.kc.outputs.line }}`, `${{ steps.pkg.outputs.version }}-kc${{ steps.kc.outputs.major }}`, `latest`.
+                  append_body: true
+                  files: dist_keycloak/keycloak-theme-*.jar
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    # ────────────────────────────────────────────────────────────────
+    # 3. docker-pr — PR-only validation. Only fires when the PR
+    #                actually touches docker-relevant files. Theme
+    #                code changes flow through verify→release→docker
+    #                on main; they are *not* what docker-pr validates
+    #                (discover always pulls the latest released jar,
+    #                not the PR's jar).
+    # ────────────────────────────────────────────────────────────────
+    docker-pr:
+        name: Docker build (PR, no push)
+        needs: [changes, verify]
+        if: |
+            github.event_name == 'pull_request'
+            && needs.changes.outputs.docker == 'true'
+        uses: ./.github/workflows/_docker-build.yml
         with:
-          filters: |
-            docker:
-              - 'Dockerfile'
-              - '.dockerignore'
-              - '.keycloak-versions'
-              - '.github/workflows/ci.yml'
-              - '.github/workflows/_docker-build.yml'
-              - '.github/actions/keycloak-version/**'
+            push: false
 
-  # ────────────────────────────────────────────────────────────────
-  # 1. verify — type check + theme jar build.
-  #    Skipped on tag pushes (the tag is a downstream of an already
-  #    verified `main` push that produced the GH Release; the docker
-  #    job pulls its jar from that release, not from a fresh build).
-  # ────────────────────────────────────────────────────────────────
-  verify:
-    name: Type check & theme jar build
-    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/setup-toolchain
-
-      # `tsc -b` already runs as part of `pnpm run build`, which
-      # `build-keycloak-theme` invokes — no need for a separate noEmit pass.
-      - name: Build Keycloak theme
-        run: pnpm run build-keycloak-theme
-
-      - name: Upload theme jar
-        uses: actions/upload-artifact@v7
+    # ────────────────────────────────────────────────────────────────
+    # 4. docker — fires after release succeeds OR on tag push.
+    #             `verify.result != 'failure'` permits the tag-push
+    #             path where verify is intentionally skipped.
+    # ────────────────────────────────────────────────────────────────
+    docker:
+        name: Docker build & push
+        needs: [verify, release]
+        if: |
+            always()
+            && needs.verify.result != 'failure'
+            && needs.verify.result != 'cancelled'
+            && (
+                (needs.release.result == 'success' && needs.release.outputs.released == 'true')
+                || startsWith(github.ref, 'refs/tags/v')
+            )
+        uses: ./.github/workflows/_docker-build.yml
         with:
-          name: theme-jar-build
-          path: dist_keycloak/keycloak-theme-*.jar
-          retention-days: 1
-          if-no-files-found: error
-
-  # ────────────────────────────────────────────────────────────────
-  # 2. release — main push only, on package.json version bump.
-  #              Reuses the jar from `verify` (no rebuild).
-  # ────────────────────────────────────────────────────────────────
-  release:
-    name: GitHub Release on version bump
-    needs: verify
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    outputs:
-      released: ${{ steps.tag_check.outputs.released }}
-      version: ${{ steps.pkg.outputs.version }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Resolve Keycloak version
-        id: kc
-        uses: ./.github/actions/keycloak-version
-
-      - name: Read package.json version
-        id: pkg
-        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
-
-      - name: Check tag existence
-        id: tag_check
-        run: |
-          git fetch --tags
-          if git rev-parse "v${{ steps.pkg.outputs.version }}" >/dev/null 2>&1; then
-              echo "released=false" >> "$GITHUB_OUTPUT"
-              echo "::notice::v${{ steps.pkg.outputs.version }} already released — skipping"
-          else
-              echo "released=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Download theme jar from verify
-        if: steps.tag_check.outputs.released == 'true'
-        uses: actions/download-artifact@v8
-        with:
-          name: theme-jar-build
-          path: dist_keycloak/
-
-      # OCI repository names must be lowercase; `github.repository_owner`
-      # preserves display casing (e.g. `AISFlow`). Lowercase before
-      # interpolating into the release body.
-      - name: Compute lowercase image name
-        id: img
-        if: steps.tag_check.outputs.released == 'true'
-        env:
-          OWNER: ${{ github.repository_owner }}
-        run: echo "name=${OWNER,,}/keycloak" >> "$GITHUB_OUTPUT"
-
-      - name: Create GitHub Release
-        if: steps.tag_check.outputs.released == 'true'
-        uses: softprops/action-gh-release@v3
-        with:
-          name: Release v${{ steps.pkg.outputs.version }} (kc${{ steps.kc.outputs.version }})
-          tag_name: v${{ steps.pkg.outputs.version }}
-          generate_release_notes: true
-          draft: false
-          prerelease: ${{ contains(steps.pkg.outputs.version, '-') }}
-          body: |
-            Built against **Keycloak ${{ steps.kc.outputs.version }}**.
-
-            Docker image (multi-arch, GHCR):
-
-            ```
-            ghcr.io/${{ steps.img.outputs.name }}:${{ steps.pkg.outputs.version }}-kc${{ steps.kc.outputs.version }}
-            ```
-
-            Other tags published for this release: `${{ steps.pkg.outputs.version }}`, `${{ steps.pkg.outputs.version }}-kc${{ steps.kc.outputs.line }}`, `${{ steps.pkg.outputs.version }}-kc${{ steps.kc.outputs.major }}`, `latest`.
-          append_body: true
-          files: dist_keycloak/keycloak-theme-*.jar
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # ────────────────────────────────────────────────────────────────
-  # 3. docker (build-only) — PR validates the build with no push.
-  # ────────────────────────────────────────────────────────────────
-  docker-pr:
-    name: Docker build (PR, no push)
-    needs: [changes, verify]
-    # Only fire when the PR actually touches files that affect the
-    # docker build — Dockerfile, KC version list, build infra. Theme
-    # code changes flow through verify→release→docker on main; they
-    # are not what `docker-pr` validates anyway (the discover job
-    # always pulls the *latest released* jar, not the PR's jar).
-    if: |
-      github.event_name == 'pull_request'
-      && needs.changes.outputs.docker == 'true'
-    uses: ./.github/workflows/_docker-build.yml
-    with:
-      push: false
-
-  # ────────────────────────────────────────────────────────────────
-  # 4. docker (push) — fires only after release succeeds OR on tag push.
-  #                    Skipped if version wasn't bumped (no new release).
-  # ────────────────────────────────────────────────────────────────
-  docker:
-    name: Docker build & push
-    needs: [verify, release]
-    # `verify.result != 'failure'` permits the tag-push path where
-    # verify is intentionally skipped (see verify's `if:`).
-    if: |
-      always()
-      && needs.verify.result != 'failure'
-      && needs.verify.result != 'cancelled'
-      && (
-          (needs.release.result == 'success' && needs.release.outputs.released == 'true')
-          || startsWith(github.ref, 'refs/tags/v')
-      )
-    uses: ./.github/workflows/_docker-build.yml
-    with:
-      theme_version: ${{ needs.release.outputs.version }}
-      push: true
+            theme_version: ${{ needs.release.outputs.version }}
+            push: true

@@ -1,0 +1,28 @@
+name: Docker build env
+description: |
+    Set up Docker Buildx and (optionally) log in to GHCR.
+    Used by every job in `_docker-build.yml` that drives buildx — kept as
+    a composite action so the buildx version, registry hostname, and
+    auth wiring stay in exactly one place.
+
+inputs:
+    push:
+        description: 'Whether to log in to GHCR (set "false" for build-only validation).'
+        required: false
+        default: "true"
+    token:
+        description: "GitHub token for GHCR auth. Required when push=true."
+        required: false
+        default: ""
+
+runs:
+    using: composite
+    steps:
+        - uses: docker/setup-buildx-action@v4
+
+        - if: inputs.push == 'true'
+          uses: docker/login-action@v4
+          with:
+              registry: ghcr.io
+              username: ${{ github.actor }}
+              password: ${{ inputs.token }}
