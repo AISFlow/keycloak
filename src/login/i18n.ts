@@ -60,7 +60,7 @@ const { I18nProvider, useI18n } = i18nBuilder
 		},
 		ko: {
 			welcomeMessage:
-				'AISFlow 에 오신 것을 환영합니다 - 매끄러운 계획과 조직 관리를 위한 관문입니다.',
+				'AISFlow 에 오신 것을 환영합니다.',
 			loginAccountTitle: '계정에 로그인',
 			registerTitle: '회원가입',
 			email: '이메일',
