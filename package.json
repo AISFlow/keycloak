@@ -26,7 +26,7 @@
 		"clsx": "^2.1.1",
 		"i18next": "^26.0.8",
 		"input-otp": "^1.4.2",
-		"jsx-email": "^2.8.4",
+		"jsx-email": "^3.0.0",
 		"keycloakify": "^11.15.3",
 		"lucide-react": "^0.473.0",
 		"radix-ui": "latest",
